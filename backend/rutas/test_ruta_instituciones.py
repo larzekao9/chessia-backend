@@ -196,3 +196,79 @@ def test_un_usuario_pertenece_a_una_sola_institucion(perfiles) -> None:
     anterior = [i for i in cliente.get("/instituciones", headers=plataforma).json() if i["id"] == primera["id"]][0]
     assert anterior["cantidad_docentes"] == 0 and anterior["administrador_id"] is None  # al mudarse, la primera queda sin administrador
     assert _yo(cliente, personas["director"])["institucion"]["id"] == segunda["id"]
+
+
+# --- Aislamiento de partidas por institución -----------------------------------------------------------------------------------
+
+
+def _partida_de(cliente, quien) -> str:
+    return cliente.post("/partida", json={"nivel": 3}, headers=quien["headers"]).json()["id"]
+
+
+@pytest.fixture
+def aislado(perfiles):
+    """Una institución con su director y su docente; un alumno en el curso del docente y otro alumno suelto, sin curso."""
+    cliente, personas, _ = perfiles
+    institucion = _crear_institucion(cliente, personas, administrador_id=personas["director"]["id"])
+    cliente.put(f"/instituciones/{institucion['id']}/docentes/{personas['docente']['id']}", headers=personas["plataforma"]["headers"])
+    curso = cliente.post("/cursos", json={"nombre": "Ajedrez 1ro A"}, headers=personas["docente"]["headers"]).json()
+    cliente.post("/cursos/unirse", json={"codigo": curso["codigo"]}, headers=personas["alumno"]["headers"])
+    registro = cliente.post("/auth/registro", json={"email": "suelto@test.com", "nombre": "Suelto Pérez", "password": "secreto1"}).json()
+    personas["suelto"] = {"id": registro["usuario"]["id"], "headers": {"Authorization": f"Bearer {registro['tokens']['access_token']}"}}
+    return cliente, personas
+
+
+def test_un_docente_o_director_solo_ve_las_partidas_de_sus_alumnos(aislado) -> None:
+    cliente, personas = aislado
+    de_alumno, de_suelto = _partida_de(cliente, personas["alumno"]), _partida_de(cliente, personas["suelto"])
+
+    def ve(quien, partida):
+        return cliente.get(f"/partida/{partida}", headers=personas[quien]["headers"]).status_code
+
+    assert (ve("docente", de_alumno), ve("director", de_alumno), ve("plataforma", de_alumno)) == (200, 200, 200)
+    assert (ve("docente", de_suelto), ve("director", de_suelto)) == (403, 403)
+    assert ve("plataforma", de_suelto) == 200
+    assert ve("suelto", de_alumno) == 403  # un jugador sigue sin ver la de otro
+
+
+def test_un_docente_no_toca_los_permisos_ni_el_analisis_de_partidas_ajenas(aislado) -> None:
+    cliente, personas = aislado
+    de_alumno, de_suelto = _partida_de(cliente, personas["alumno"]), _partida_de(cliente, personas["suelto"])
+    docente = personas["docente"]["headers"]
+
+    def permisos(partida):
+        return cliente.patch(f"/partida/{partida}/permisos", json={"permite_camara": True}, headers=docente).status_code
+
+    assert permisos(de_alumno) == 200 and permisos(de_suelto) == 403
+    assert cliente.get(f"/partida/{de_suelto}/analisis-red", headers=docente).status_code == 403
+    assert cliente.get(f"/partida/{de_alumno}/analisis-red", headers=docente).status_code != 403
+    assert cliente.post(f"/partida/{de_suelto}/calibrar", headers=docente).status_code == 403
+
+
+def test_el_registro_de_partidas_se_limita_a_los_alumnos_de_cada_facilitador(aislado, monkeypatch) -> None:
+    from backend.modelos.partida import Partida
+
+    monkeypatch.setattr(Partida, "jugadas_jugador", property(lambda self: 1))  # sin jugar de verdad: alcanza con que cuenten
+    cliente, personas = aislado
+    de_alumno, de_suelto = _partida_de(cliente, personas["alumno"]), _partida_de(cliente, personas["suelto"])
+
+    def lista(quien):
+        return {p["id"] for p in cliente.get("/partida", headers=personas[quien]["headers"]).json()}
+
+    assert lista("plataforma") >= {de_alumno, de_suelto}
+    assert lista("docente") == {de_alumno} and lista("director") == {de_alumno}
+    assert lista("suelto") == {de_suelto}
+
+
+def test_la_transmision_en_vivo_de_un_docente_llega_a_sus_alumnos_y_no_a_otros(aislado) -> None:
+    cliente, personas = aislado
+    transmision = _partida_de(cliente, personas["docente"])
+    assert cliente.patch(f"/partida/{transmision}/permisos", json={"es_demostracion": True}, headers=personas["docente"]["headers"]).status_code == 200
+
+    def activa(quien):
+        return cliente.get("/partida/demostracion-activa", headers=personas[quien]["headers"]).json()
+
+    assert activa("alumno")["id"] == transmision and activa("director")["id"] == transmision and activa("plataforma")["id"] == transmision
+    assert activa("suelto") is None
+    assert cliente.get(f"/partida/{transmision}", headers=personas["suelto"]["headers"]).status_code == 403
+    assert cliente.get(f"/partida/{transmision}", headers=personas["alumno"]["headers"]).status_code == 200

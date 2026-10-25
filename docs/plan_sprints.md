@@ -840,11 +840,38 @@ Hecho: sin clave JWT por defecto (si falta `JWT_SECRET_KEY` se usa una al azar p
 IP y correo cada 10 min, respuesta 429), cabeceras de seguridad en toda respuesta (`backend/seguridad.py`; HSTS solo por HTTPS),
 política de contenido en modo «solo informar», CORS configurable con `CORS_ORIGINS`, clave de 8 caracteres al registrarse en la web.
 
-Pendiente, en este orden: (1) pasar la política de contenido a modo que bloquea cuando la consola esté limpia; (2) subir el mínimo de
-contraseña a 8 en el backend, de acuerdo con la app móvil; (3) verificación de correo (necesaria para el consentimiento de los
-padres); (4) registro de auditoría (quién borró o editó a quién) y plazo de conservación de los respaldos; (5) `pip-audit` (Python) y
-actualizar Vite (el aviso de `npm audit` afecta solo al servidor de desarrollo, no al sitio publicado); (6) revisar límites de
-tamaño y tipo de las subidas; (7) aislar las partidas por institución.
+Baja de cuenta y política (25/10/2026): `POST /auth/me/eliminar` borra la cuenta propia con todo lo suyo (vuelve a pedir la
+contraseña, o el correo completo si la cuenta entra solo con Google; 8 intentos fallidos y 429; la cuenta de la plataforma no se
+elimina desde la web). Pantalla pública `/#politica` (`Politica.jsx`) enlazada desde el registro, el botón de Google y Mi Perfil;
+al crear una cuenta con correo en la web hay que marcar la casilla de aceptación y de autorización de menores. **La casilla no se
+guarda en el servidor y la app móvil todavía no la tiene.** Para producción falta: fecha de nacimiento con autorización del tutor
+guardada (quién, cuándo y qué versión), verificación de correo, revisión legal del texto y definir el plazo de los respaldos.
+
+Segunda tanda (25/10/2026), con el modelo de negocio ya cerrado:
+- Contraseña nueva: mínimo 8 caracteres, con letras y números (`RegistroRequest`); el login sigue aceptando las anteriores.
+- Dependencias: `pip-audit` encontró 8 avisos en `python-jose` 3.3.0 y `ecdsa` 0.19.2. Se subió `python-jose` a 3.5.0; `ecdsa` no tiene
+  versión corregida y el aviso es de firmas ECDSA, que no usamos (el JWT es HS256 con la clave propia). `npm audit`: 0 avisos tras
+  `npm audit fix` (solo cambió el lockfile).
+- Subidas (`backend/servicios/subidas.py`): el tope de tamaño se aplica mientras se lee (413) y el contenido se valida por sus primeros
+  bytes (imágenes PNG/JPG/WEBP, videos MP4/MOV/WebM), no solo por la extensión; OpenCV con tope de 64 millones de píxeles.
+- Política de contenido del navegador: ahora BLOQUEA. Si una pantalla dejara de cargar algo, `CSP_SOLO_INFORMAR=1` la vuelve a solo
+  avisar. La sesión sigue en el navegador (no se pasó a cookies: rompería la app móvil); se mitiga con esa política, sin
+  `innerHTML` ni `dangerouslySetInnerHTML` en el código, y «Recordar en este equipo» ahora arranca desmarcado.
+- Aislamiento por institución: un docente o administrador solo ve y toca las partidas de sus alumnos (listado, ver, permisos,
+  análisis de la red, calibrar) y la transmisión en vivo de un docente llega solo a sus alumnos. Queda abierto `GET
+  /partida/{id}/analisis-completo`: es anónimo por diseño (la web y la app lo llaman sin sesión) y se protege solo porque el id de
+  la partida no se puede adivinar; cerrarlo exige cambiar los dos clientes.
+- Auditoría (`/auditoria`, pantalla «Auditoría» de la plataforma): quién eliminó o editó cuentas, creó o cambió instituciones, y generó
+  o anuló códigos. Sin datos personales, 1 año. Nueva tabla `auditoria` (SQL regenerado).
+- Verificación de correo (`/auth/verificar-correo`): código de 6 dígitos que vence a los 15 minutos, con límite de intentos y de
+  reenvíos. Solo se activa si el servidor define `SMTP_HOST` y `SMTP_REMITENTE`; sin eso todo sigue igual. Es «blanda»: avisa y pide el
+  código, pero no bloquea nada. Nuevas columnas en `usuario` (SQL regenerado).
+
+Pendiente para producción: definir el plazo de los respaldos nocturnos y sumarlo a la política; poner el correo de contacto en
+`Politica.jsx`; volver obligatoria la verificación de correo cuando haya un correo real configurado; guardar en el servidor la
+aceptación de los términos y la autorización de los padres (fecha de nacimiento, quién, cuándo y qué versión), y sumarla a la app
+móvil; invalidar en el servidor el refresh token al cerrar sesión; pasar la sesión a cookies seguras si algún día la app móvil lo
+permite; revisión legal del texto de la política.
 
 ---
 

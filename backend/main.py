@@ -14,6 +14,9 @@ if os.environ.get("PYTEST_RUNNING") != "1":
 # Antes de que cualquier módulo importe OpenCV: con las «transformaciones por hardware» de Media Foundation (lo que trae por defecto)
 # algunas webcams USB tardan 15 a 20 s en abrir (medido: 16 a 21 s contra 0,2 s apagadas). Se puede volver a prender con la variable en el .env.
 os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+# Tope de píxeles al decodificar una imagen subida: un PNG chico en bytes puede declarar miles de millones de píxeles y agotar la memoria.
+# 64 millones cubre de sobra una cámara de 4K (8 millones).
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(64 * 1024 * 1024))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +39,7 @@ from backend.rutas.ruta_simulacion import router as simulacion_router
 from backend.rutas.ruta_facilitador import router as facilitador_router
 from backend.rutas.ruta_curso import router as curso_router
 from backend.rutas.ruta_institucion import router as institucion_router
+from backend.rutas.ruta_auditoria import router as auditoria_router
 from backend.rutas.ruta_medallas import router as medallas_router
 from backend.rutas.ruta_tutor import router as tutor_router
 from backend.rutas.ruta_entrenamiento import router as entrenamiento_router
@@ -64,6 +68,13 @@ async def lifespan(app: FastAPI):
         limpiar_salas_inactivas()
     except Exception:
         logger.exception("No se pudo limpiar salas inactivas al arrancar el backend")
+    try:
+        from backend.rutas.ruta_auth import _fabrica_sesiones
+        from backend.servicios.auditoria import depurar_antiguos
+
+        depurar_antiguos(_fabrica_sesiones())
+    except Exception:
+        logger.exception("No se pudo depurar la auditoría antigua al arrancar el backend")
     yield
 
 
@@ -96,6 +107,7 @@ app.include_router(simulacion_router)
 app.include_router(facilitador_router)
 app.include_router(curso_router)
 app.include_router(institucion_router)
+app.include_router(auditoria_router)
 app.include_router(medallas_router)
 app.include_router(tutor_router)
 app.include_router(entrenamiento_router)

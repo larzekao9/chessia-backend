@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.servicios.subidas import es_imagen_png_jpg_webp
+
 MEDIA_AVATARES_DIR = Path(__file__).resolve().parent.parent.parent / "media" / "avatares"
 
 URL_BASE_AVATARES = "/media/avatares"
@@ -45,6 +47,9 @@ def guardar_avatar(usuario_id: int, nombre_archivo_original: str, contenido: byt
         raise ValueError(
             f"La imagen supera el tamaño máximo permitido ({TAMANO_MAXIMO_BYTES // (1024 * 1024)}MB)"
         )
+
+    if not es_imagen_png_jpg_webp(contenido):
+        raise ValueError("El archivo no es una imagen válida (JPG, PNG o WEBP)")
 
     MEDIA_AVATARES_DIR.mkdir(parents=True, exist_ok=True)
     for archivo_previo in MEDIA_AVATARES_DIR.glob(f"{usuario_id}.*"):

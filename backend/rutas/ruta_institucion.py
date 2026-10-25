@@ -19,6 +19,7 @@ from backend.esquemas.institucion_esquema import (
 )
 from backend.modelos.tablas_orm import InstitucionORM, UsuarioORM
 from backend.rutas.ruta_auth import get_current_admin_institucion, get_current_facilitador, get_current_principal, get_db
+from backend.servicios.auditoria import registrar as auditar
 from backend.servicios.institucion import servicio_instituciones as instituciones
 from backend.servicios.institucion.servicio_instituciones import ErrorInstitucion, NombreEnUso
 
@@ -70,13 +71,14 @@ def listar_instituciones(_: int = Depends(get_current_principal), db: Session = 
 
 @router.post("", response_model=InstitucionResponse, status_code=status.HTTP_201_CREATED, summary="Crear una institución (solo la plataforma)")
 def crear_institucion(
-    data: CrearInstitucionRequest, _: int = Depends(get_current_principal), db: Session = Depends(get_db)
+    data: CrearInstitucionRequest, actor_id: int = Depends(get_current_principal), db: Session = Depends(get_db)
 ) -> InstitucionResponse:
     """Crea la institución. Con `administrador_id`, ese facilitador queda como su administrador y como su primer docente."""
     try:
         institucion = instituciones.crear(db, data.nombre, data.tipo, data.administrador_id)
     except ErrorInstitucion as error:
         raise _error(error) from error
+    auditar(db, actor_id, "institucion.crear", "institucion", institucion.id, f"tipo={institucion.tipo}")
     return _respuesta(db, institucion, con_docentes=True)
 
 
@@ -116,7 +118,7 @@ def alumnos_de_mi_institucion(
 
 @router.patch("/{institucion_id}", response_model=InstitucionResponse, summary="Editar una institución (solo la plataforma)")
 def editar_institucion(
-    institucion_id: int, data: EditarInstitucionRequest, _: int = Depends(get_current_principal), db: Session = Depends(get_db)
+    institucion_id: int, data: EditarInstitucionRequest, actor_id: int = Depends(get_current_principal), db: Session = Depends(get_db)
 ) -> InstitucionResponse:
     """Cambia nombre, tipo y/o administrador (edición parcial; `administrador_id: null` la deja sin administrador)."""
     institucion = _existente(db, institucion_id)
@@ -127,6 +129,7 @@ def editar_institucion(
             instituciones.designar_administrador(db, institucion, campos["administrador_id"])
     except ErrorInstitucion as error:
         raise _error(error) from error
+    auditar(db, actor_id, "institucion.editar", "institucion", institucion_id, ", ".join(sorted(campos)))
     return _respuesta(db, institucion, con_docentes=True)
 
 
@@ -136,7 +139,7 @@ def editar_institucion(
     summary="Asignar un docente a la institución (solo la plataforma)",
 )
 def asignar_docente(
-    institucion_id: int, usuario_id: int, _: int = Depends(get_current_principal), db: Session = Depends(get_db)
+    institucion_id: int, usuario_id: int, actor_id: int = Depends(get_current_principal), db: Session = Depends(get_db)
 ) -> InstitucionResponse:
     """Pasa a un facilitador activo a esta institución (si estaba en otra, se mueve)."""
     institucion = _existente(db, institucion_id)
@@ -144,6 +147,7 @@ def asignar_docente(
         instituciones.asignar_docente(db, institucion, usuario_id)
     except ErrorInstitucion as error:
         raise _error(error) from error
+    auditar(db, actor_id, "institucion.docente_asignar", "institucion", institucion_id, f"usuario={usuario_id}")
     return _respuesta(db, institucion, con_docentes=True)
 
 
@@ -153,11 +157,12 @@ def asignar_docente(
     summary="Quitar un docente de la institución (solo la plataforma)",
 )
 def quitar_docente(
-    institucion_id: int, usuario_id: int, _: int = Depends(get_current_principal), db: Session = Depends(get_db)
+    institucion_id: int, usuario_id: int, actor_id: int = Depends(get_current_principal), db: Session = Depends(get_db)
 ) -> InstitucionResponse:
     institucion = _existente(db, institucion_id)
     try:
         instituciones.quitar_docente(db, institucion, usuario_id)
     except ErrorInstitucion as error:
         raise _error(error) from error
+    auditar(db, actor_id, "institucion.docente_quitar", "institucion", institucion_id, f"usuario={usuario_id}")
     return _respuesta(db, institucion, con_docentes=True)

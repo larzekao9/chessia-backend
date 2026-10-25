@@ -61,7 +61,7 @@ def _registrar_jugador(cliente: TestClient, email: str, nombre: str, rol: str = 
     r = cliente.post("/auth/registro", json={
         "email": email,
         "nombre": nombre,
-        "password": "test123",
+        "password": "test1234",
         "rol": rol
     })
     assert r.status_code == 201

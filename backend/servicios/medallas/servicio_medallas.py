@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from backend.modelos.tablas_orm import CalibracionORM, MedallaGanadaORM, MensajeTutorORM, PartidaORM, UsuarioORM
 from backend.servicios.medallas import personalizadas
 from backend.servicios.medallas.catalogo import CATALOGO, NIVELES, Medalla
+from backend.servicios.subidas import es_imagen_png_jpg_webp
 
 MEDIA_MEDALLAS_DIR = Path(__file__).resolve().parent.parent.parent / "media" / "medallas"
 URL_BASE_MEDALLAS = "/media/medallas"
@@ -234,11 +235,7 @@ def url_imagen(codigo: str) -> str | None:
 
 
 def _es_imagen_valida(contenido: bytes) -> bool:
-    return (
-        contenido.startswith(b"\x89PNG\r\n\x1a\n")
-        or contenido.startswith(b"\xff\xd8\xff")
-        or (contenido[:4] == b"RIFF" and contenido[8:12] == b"WEBP")
-    )
+    return es_imagen_png_jpg_webp(contenido)
 
 
 def guardar_imagen(db: Session, codigo: str, nombre_original: str, contenido: bytes) -> str:

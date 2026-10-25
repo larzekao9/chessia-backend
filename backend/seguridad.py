@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 
-# La política de contenido va en modo «solo informar»: el navegador anota en su consola lo que bloquearía, sin romper nada. Cuando la
-# consola esté limpia en todas las pantallas se pasa a `Content-Security-Policy` (ver docs/plan_sprints.md).
+# La política de contenido BLOQUEA lo que no sea de los orígenes de abajo (también frena que un script inyectado robe la sesión que la web
+# guarda en el navegador). Si alguna pantalla dejara de cargar algo, se vuelve al modo «solo informar» con `CSP_SOLO_INFORMAR=1` en el
+# entorno y se reinicia: el navegador anota en su consola lo que bloquearía, sin romper nada.
 POLITICA_DE_CONTENIDO = "; ".join(
     [
         "default-src 'self'",
@@ -31,9 +32,15 @@ CABECERAS_FIJAS: list[tuple[bytes, bytes]] = [
     (b"x-frame-options", b"SAMEORIGIN"),
     (b"referrer-policy", b"strict-origin-when-cross-origin"),
     (b"permissions-policy", b"geolocation=(), payment=(), usb=()"),
-    (b"content-security-policy-report-only", POLITICA_DE_CONTENIDO.encode("latin-1")),
 ]
 HSTS = (b"strict-transport-security", b"max-age=15552000")  # 180 días
+
+
+def cabecera_de_contenido() -> tuple[bytes, bytes]:
+    """La política de contenido, que bloquea (`Content-Security-Policy`) o solo informa (`...-Report-Only`) según `CSP_SOLO_INFORMAR`."""
+    solo_informar = os.environ.get("CSP_SOLO_INFORMAR", "").strip().lower() in ("1", "true", "si", "sí")
+    nombre = b"content-security-policy-report-only" if solo_informar else b"content-security-policy"
+    return nombre, POLITICA_DE_CONTENIDO.encode("latin-1")
 
 
 class CabecerasSeguridad:
@@ -53,7 +60,7 @@ class CabecerasSeguridad:
         async def enviar(mensaje) -> None:
             if mensaje["type"] == "http.response.start":
                 existentes = {nombre.lower() for nombre, _ in mensaje.get("headers", [])}
-                agregadas = [h for h in CABECERAS_FIJAS + ([HSTS] if por_https else []) if h[0] not in existentes]
+                agregadas = [h for h in [*CABECERAS_FIJAS, cabecera_de_contenido(), *([HSTS] if por_https else [])] if h[0] not in existentes]
                 mensaje = {**mensaje, "headers": [*mensaje.get("headers", []), *agregadas]}
             await send(mensaje)
 

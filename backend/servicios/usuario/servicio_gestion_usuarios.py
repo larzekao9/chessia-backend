@@ -17,7 +17,7 @@ from backend.modelos.tablas_orm import (
     UsuarioORM,
 )
 from backend.servicios.auth import actualizar_perfil, get_user_by_email
-from backend.servicios.curso.servicio_cursos import retirar_usuario_de_cursos
+from backend.servicios.curso.servicio_cursos import es_principal, retirar_usuario_de_cursos
 from backend.servicios.institucion.servicio_instituciones import retirar_administrador
 from backend.servicios.medallas.servicio_creacion import retirar_usuario_de_medallas
 from backend.servicios.usuario.servicio_avatar import eliminar_avatar
@@ -77,19 +77,24 @@ def editar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int, campo
     return actualizar_perfil(db, objetivo, cambios)
 
 
-def validar_eliminacion(db: Session, objetivo: UsuarioORM, solicitante_id: int) -> None:
+def validar_eliminacion(db: Session, objetivo: UsuarioORM, solicitante_id: int, propia: bool = False) -> None:
     """Comprueba que `objetivo` se puede eliminar, sin tocar nada.
 
+    `propia=True` es la baja que pide la propia persona (Mi Perfil): ahí el solicitante sí es el objetivo, y la cuenta de la
+    plataforma no se da de baja desde la web (su correo está en `CORREOS_FACILITADORES`; se maneja desde el servidor).
+
     Raises:
-        ErrorGestionUsuarios: si es el propio solicitante o el último facilitador activo.
+        ErrorGestionUsuarios: si es el propio solicitante (y no es una baja propia), el último facilitador activo o la plataforma.
     """
-    if objetivo.id == solicitante_id:
+    if objetivo.id == solicitante_id and not propia:
         raise ErrorGestionUsuarios("No podés eliminar tu propia cuenta")
+    if propia and es_principal(objetivo):
+        raise ErrorGestionUsuarios("La cuenta de la plataforma no se da de baja desde la web: se maneja desde el servidor")
     if _es_facilitador_activo(objetivo) and _facilitadores_activos(db) <= 1:
         raise ErrorGestionUsuarios("No se puede eliminar al único facilitador activo")
 
 
-def eliminar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int) -> dict:
+def eliminar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int, propia: bool = False) -> dict:
     """Elimina definitivamente a `objetivo` y lo que depende de su cuenta.
 
     Borra sus calibraciones, sus mensajes con el tutor, su registro de descargas del dataset, su foto y la
@@ -97,9 +102,9 @@ def eliminar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int) -> 
     esta función, porque viven detrás de su propio repositorio. Devuelve cuántas filas se borraron de cada cosa.
 
     Raises:
-        ErrorGestionUsuarios: si es el propio solicitante o el último facilitador activo.
+        ErrorGestionUsuarios: si es el propio solicitante (y no es una baja propia), el último facilitador activo o la plataforma.
     """
-    validar_eliminacion(db, objetivo, solicitante_id)
+    validar_eliminacion(db, objetivo, solicitante_id, propia)
 
     borradas = {
         "calibraciones": db.execute(delete(CalibracionORM).where(CalibracionORM.usuario_id == objetivo.id)).rowcount,

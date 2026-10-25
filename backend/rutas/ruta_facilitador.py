@@ -11,7 +11,9 @@ from backend.rutas.ruta_auth import get_current_facilitador, get_db
 from backend.servicios.auth import get_user_by_id
 from backend.servicios.medallas import servicio_creacion as creacion
 from backend.servicios.medallas import servicio_medallas
+from backend.servicios.subidas import leer_con_tope
 from backend.servicios.facilitador.servicio_videos import (
+    TAMANO_MAXIMO_BYTES as TAMANO_MAXIMO_VIDEO_BYTES,
     borrar_video_pieza,
     guardar_video_pieza,
     listar_videos_piezas,
@@ -36,7 +38,7 @@ async def subir_video_pieza(
     Solo acepta `.mp4`, `.webm` o `.mov`. El nuevo video reemplaza al
     anterior del mismo facilitador para esa pieza, si había uno.
     """
-    contenido = await archivo.read()
+    contenido = await leer_con_tope(archivo, TAMANO_MAXIMO_VIDEO_BYTES, "El video")
     try:
         url = guardar_video_pieza(usuario_id, tipo_pieza, archivo.filename or "", contenido)
     except ValueError as error:
@@ -100,7 +102,7 @@ async def subir_imagen_medalla(
     """Sube (o reemplaza) la ilustración del centro de una medalla. PNG, JPG o WEBP de hasta 2 MB; se comprueba el contenido,
     no solo la extensión. Las de fábrica las cambia el facilitador principal; las propias, su creador o el principal."""
     _exigir_permiso_imagen(db, usuario_id, codigo)
-    contenido = await archivo.read()
+    contenido = await leer_con_tope(archivo, servicio_medallas.TAMANO_MAXIMO_BYTES, "La imagen")
     try:
         url = servicio_medallas.guardar_imagen(db, codigo, archivo.filename or "", contenido)
     except ValueError as error:

@@ -201,7 +201,7 @@ def test_solo_el_principal_sube_la_imagen_de_una_medalla_y_se_valida_el_contenid
     assert subir(comun).status_code == 403 and subir(jugador).status_code == 403
     assert subir(principal, nombre="figurita.gif").status_code == 400  # extensión no permitida
     assert subir(principal, contenido=b"esto no es una imagen").status_code == 400  # el contenido no coincide
-    assert subir(principal, contenido=PNG + b"0" * (2 * 1024 * 1024)).status_code == 400  # más de 2 MB
+    assert subir(principal, contenido=PNG + b"0" * (2 * 1024 * 1024)).status_code == 413  # más de 2 MB (se corta al leer)
     assert subir(principal, codigo="medalla_que_no_existe").status_code == 400
 
     subida = subir(principal)

@@ -3,11 +3,23 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from backend.esquemas.institucion_esquema import InstitucionResumenResponse
 
 Rol = Literal["jugador", "facilitador"]
+
+LARGO_MINIMO_PASSWORD = 8
+
+
+def validar_password_nueva(password: str) -> str:
+    """Regla para una contraseña NUEVA: al menos 8 caracteres, con alguna letra y algún número. El login no la aplica: las cuentas
+    anteriores siguen entrando con la clave que tenían."""
+    if len(password) < LARGO_MINIMO_PASSWORD:
+        raise ValueError(f"La contraseña tiene que tener al menos {LARGO_MINIMO_PASSWORD} caracteres")
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        raise ValueError("La contraseña tiene que tener letras y números")
+    return password
 
 PresetEnsenanza = Literal["infantil", "estandar", "adultos"]
 
@@ -17,9 +29,14 @@ class RegistroRequest(BaseModel):
 
     email: EmailStr
     nombre: str = Field(min_length=2, max_length=100)
-    password: str = Field(min_length=6, max_length=100)
+    password: str = Field(max_length=100)
     rol: Rol = "jugador"
     clave_facilitador: str | None = None
+
+    @field_validator("password")
+    @classmethod
+    def _password_segura(cls, valor: str) -> str:
+        return validar_password_nueva(valor)
 
 
 class GoogleAuthRequest(BaseModel):
@@ -82,6 +99,10 @@ class UsuarioResponse(BaseModel):
     activo: bool = True
     es_principal: bool = False
     es_admin_institucion: bool = False
+    correo_verificado: bool = True
+    """`False` mientras falta confirmar el correo con el código que se manda al registrarse (solo si el servidor envía correos)."""
+    tiene_password: bool = True
+    """`False` si la cuenta entra solo con Google: para darse de baja confirma con su correo en vez de la contraseña."""
     institucion: InstitucionResumenResponse | None = None
     """Perfil dentro de la plataforma: `es_principal` (la plataforma), `es_admin_institucion` (administra la institución de
     `institucion`) o docente (facilitador con `institucion`). La pantalla arma el menú con estos datos."""
@@ -147,6 +168,26 @@ class CodigoInvitacionResponse(BaseModel):
     expira_en: str
     usado_en: str | None = None
     usado_por: str | None = None
+
+
+class VerificarCorreoRequest(BaseModel):
+    """Cuerpo de POST /auth/verificar-correo: el código de 6 dígitos que llegó al correo."""
+
+    codigo: str = Field(min_length=1, max_length=12)
+
+
+class EnvioCodigoResponse(BaseModel):
+    """Respuesta de POST /auth/verificar-correo/reenviar."""
+
+    enviado: bool = True
+
+
+class EliminarMiCuentaRequest(BaseModel):
+    """Cuerpo de POST /auth/me/eliminar. Para volver a comprobar que es la persona: su contraseña o, si la cuenta entra solo
+    con Google (no tiene contraseña), su correo escrito completo."""
+
+    password: str | None = Field(default=None, max_length=100)
+    confirmar_email: str | None = Field(default=None, max_length=254)
 
 
 class EliminarUsuarioResponse(BaseModel):

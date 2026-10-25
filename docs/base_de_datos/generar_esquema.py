@@ -68,6 +68,11 @@ TABLAS: dict[str, tuple[str, str]] = {
         "como facilitador. Solo se guarda su hash.",
         "En uso",
     ),
+    "auditoria": (
+        "Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación: quién, qué y a quién. "
+        "Sin datos personales; se conserva 1 año.",
+        "En uso",
+    ),
     "institucion": (
         "Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene "
         "un administrador, que es quien administra su suscripción.",
@@ -209,6 +214,20 @@ COLUMNAS: dict[tuple[str, str], str] = {
         "Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, "
         "cuya institución se deduce de su curso, y en los facilitadores de la plataforma."
     ),
+    ("usuario", "correo_verificado"): (
+        "`true` si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña "
+        "queda en `false` solo si el servidor tiene configurado el envío de correo."
+    ),
+    ("usuario", "codigo_verificacion_hash"): "Huella SHA-256 del código de 6 dígitos enviado al correo. El código en claro no se guarda.",
+    ("usuario", "codigo_verificacion_expira"): "Fecha y hora a partir de la cual el código de verificación ya no sirve (15 minutos).",
+    # auditoria
+    ("auditoria", "id"): "Identificador del evento.",
+    ("auditoria", "creado_en"): "Fecha y hora del evento.",
+    ("auditoria", "actor_id"): "Usuario que hizo la acción. Sin clave foránea: el registro sobrevive a la baja de su cuenta. Nulo si fue el sistema.",
+    ("auditoria", "accion"): "Qué se hizo, por ejemplo `usuario.eliminar`, `usuario.baja_propia` o `institucion.crear`.",
+    ("auditoria", "objetivo_tipo"): "Sobre qué se hizo: `usuario`, `institucion` o `codigo_invitacion`.",
+    ("auditoria", "objetivo_id"): "Identificador de lo afectado. Sin clave foránea, por la misma razón que `actor_id`.",
+    ("auditoria", "detalle"): "Texto corto sin datos personales (por ejemplo, los campos cambiados o el rol). Opcional.",
     # institucion
     ("institucion", "id"): "Identificador de la institución.",
     ("institucion", "nombre"): "Nombre de la institución (por ejemplo, `Asociación Departamental de Ajedrez de Santa Cruz`). Es único.",

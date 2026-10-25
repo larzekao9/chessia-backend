@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from backend.servicios.subidas import es_video_mp4_webm_mov
+
 MEDIA_VIDEOS_DIR = Path(__file__).resolve().parent.parent.parent / "media" / "videos_piezas"
 
 URL_BASE_VIDEOS_PIEZAS = "/media/videos_piezas"
@@ -58,6 +60,9 @@ def guardar_video_pieza(
         raise ValueError(
             f"El video supera el tamaño máximo permitido ({TAMANO_MAXIMO_BYTES // (1024 * 1024)}MB)"
         )
+
+    if not es_video_mp4_webm_mov(contenido):
+        raise ValueError("El archivo no es un video válido (MP4, WebM o MOV)")
 
     MEDIA_VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
     for archivo_previo in MEDIA_VIDEOS_DIR.glob(f"{usuario_id}_{tipo_pieza}.*"):

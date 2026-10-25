@@ -3,7 +3,7 @@
 Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_de_datos/generar_esquema.py`. No editar a mano.
 
 - Motor: PostgreSQL 16. La aplicación crea las tablas sola al arrancar; el script equivalente está en [base_completa.sql](base_completa.sql); para producción en Supabase, [base_supabase_produccion.sql](base_supabase_produccion.sql).
-- Tablas: 14 (12 en uso, 2 reservadas para sesiones de clase).
+- Tablas: 15 (13 en uso, 2 reservadas para sesiones de clase).
 - Sin `DATABASE_URL` configurada, la aplicación guarda las partidas en memoria y no usa estas tablas para ellas.
 
 ## Relaciones
@@ -27,6 +27,22 @@ Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_d
 | `sesion` | `partida` | 1 a N | Opcional y reservada: una partida puede pertenecer a una sesión de clase. |
 | `usuario` | `partida` | 1 a N | Un usuario juega muchas salas como blancas; una sala tiene un blanco (opcional). |
 | `usuario` | `partida` | 1 a N | Un usuario juega muchas salas como negras; una sala tiene un negro (opcional). |
+
+## `auditoria`
+
+Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación: quién, qué y a quién. Sin datos personales; se conserva 1 año.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador del evento. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora del evento. |
+| `actor_id` | INTEGER | sí |  |  | Usuario que hizo la acción. Sin clave foránea: el registro sobrevive a la baja de su cuenta. Nulo si fue el sistema. |
+| `accion` | VARCHAR | no |  |  | Qué se hizo, por ejemplo `usuario.eliminar`, `usuario.baja_propia` o `institucion.crear`. |
+| `objetivo_tipo` | VARCHAR | sí |  |  | Sobre qué se hizo: `usuario`, `institucion` o `codigo_invitacion`. |
+| `objetivo_id` | INTEGER | sí |  |  | Identificador de lo afectado. Sin clave foránea, por la misma razón que `actor_id`. |
+| `detalle` | VARCHAR | sí |  |  | Texto corto sin datos personales (por ejemplo, los campos cambiados o el rol). Opcional. |
 
 ## `institucion`
 
@@ -90,6 +106,9 @@ Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
 | `descripcion` | VARCHAR | sí |  |  | Biografía o trayectoria breve, de uso libre en el perfil. |
 | `preset_ensenanza` | VARCHAR | sí |  |  | Tono con el que Turing habla: `infantil`, `estandar` o `adultos`. Lo elige el facilitador. |
 | `institucion_id` | INTEGER | sí | FK → institucion.id |  | Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma. |
+| `correo_verificado` | BOOLEAN | no |  | true | `true` si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña queda en `false` solo si el servidor tiene configurado el envío de correo. |
+| `codigo_verificacion_hash` | VARCHAR | sí |  |  | Huella SHA-256 del código de 6 dígitos enviado al correo. El código en claro no se guarda. |
+| `codigo_verificacion_expira` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora a partir de la cual el código de verificación ya no sirve (15 minutos). |
 
 ## `calibracion`
 
@@ -300,6 +319,15 @@ erDiagram
     sesion |o--o{ partida : tiene
     usuario |o--o{ partida : tiene
     usuario |o--o{ partida : tiene
+    auditoria {
+        INTEGER id PK
+        TIMESTAMP creado_en
+        INTEGER actor_id
+        VARCHAR accion
+        VARCHAR objetivo_tipo
+        INTEGER objetivo_id
+        VARCHAR detalle
+    }
     institucion {
         INTEGER id PK
         VARCHAR nombre
@@ -334,6 +362,9 @@ erDiagram
         VARCHAR descripcion
         VARCHAR preset_ensenanza
         INTEGER institucion_id FK
+        BOOLEAN correo_verificado
+        VARCHAR codigo_verificacion_hash
+        TIMESTAMP codigo_verificacion_expira
     }
     calibracion {
         INTEGER id PK
@@ -457,6 +488,15 @@ Cada tabla es una clase ORM de `backend/modelos/tablas_orm.py`. Este diagrama cu
 
 ```mermaid
 classDiagram
+    class Auditoria {
+        -INTEGER id
+        -TIMESTAMP creado_en
+        -INTEGER actor_id
+        -VARCHAR accion
+        -VARCHAR objetivo_tipo
+        -INTEGER objetivo_id
+        -VARCHAR detalle
+    }
     class Institucion {
         -INTEGER id
         -VARCHAR nombre
@@ -491,6 +531,9 @@ classDiagram
         -VARCHAR descripcion
         -VARCHAR preset_ensenanza
         -INTEGER institucion_id
+        -BOOLEAN correo_verificado
+        -VARCHAR codigo_verificacion_hash
+        -TIMESTAMP codigo_verificacion_expira
     }
     class Calibracion {
         -INTEGER id

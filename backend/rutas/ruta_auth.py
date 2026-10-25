@@ -1,6 +1,7 @@
 """Rutas de autenticación: registro, login, refresh, me, gestión de usuarios (admin)."""
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Iterator
 
@@ -17,6 +18,9 @@ from backend.esquemas.auth_esquema import (
     CodigoGeneradoResponse,
     CodigoInvitacionResponse,
     EditarUsuarioRequest,
+    EliminarMiCuentaRequest,
+    EnvioCodigoResponse,
+    VerificarCorreoRequest,
     EliminarUsuarioResponse,
     GenerarCodigoRequest,
     VerificarCodigoRequest,
@@ -46,6 +50,7 @@ from backend.servicios.auth import (
     get_user_by_email,
     get_user_by_id,
     verificar_token_google,
+    verify_password,
 )
 from backend.servicios.calibracion import (
     PARTIDAS_DIAGNOSTICO,
@@ -67,7 +72,10 @@ from backend.servicios.auth.servicio_invitaciones import (
 from backend.servicios.curso.servicio_cursos import es_principal
 from backend.servicios.institucion.servicio_instituciones import administra_alguna, ids_alumnos_visibles
 from backend.servicios.partida.servicio_partida import eliminar_partidas_de_usuario
-from backend.servicios.usuario.servicio_avatar import guardar_avatar
+from backend.servicios.auditoria import registrar as auditar
+from backend.servicios.auth.servicio_verificacion import ErrorVerificacion, confirmar, iniciar_verificacion, reenviar
+from backend.servicios.subidas import leer_con_tope
+from backend.servicios.usuario.servicio_avatar import TAMANO_MAXIMO_BYTES as TAMANO_MAXIMO_AVATAR_BYTES, guardar_avatar
 from backend.servicios.usuario.servicio_gestion_usuarios import (
     ErrorGestionUsuarios,
     editar_usuario,
@@ -77,6 +85,7 @@ from backend.servicios.usuario.servicio_gestion_usuarios import (
 from backend.servicios.usuario.servicio_estadisticas import obtener_historial_partidas
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 security = HTTPBearer(auto_error=False)
 
 
@@ -126,6 +135,8 @@ def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
         partidas_calibradas=partidas_calibradas,
         partidas_diagnostico=PARTIDAS_DIAGNOSTICO,
         activo=user.activo,
+        correo_verificado=bool(user.correo_verificado),
+        tiene_password=bool(user.password_hash),
         es_principal=es_principal(user),
         es_admin_institucion=institucion is not None and institucion.administrador_id == user.id,
         institucion=(
@@ -245,6 +256,7 @@ def registro(data: RegistroRequest, solicitud: Request, db: Session = Depends(ge
             registrar_intento_fallido(cliente)
         raise HTTPException(status_code=400, detail=str(e))
 
+    iniciar_verificacion(db, user)  # solo si el servidor puede mandar correos: manda el código y deja la cuenta sin verificar
     access, refresh = create_tokens(user)
 
     return AuthResponse(
@@ -255,6 +267,36 @@ def registro(data: RegistroRequest, solicitud: Request, db: Session = Depends(ge
             expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         ),
     )
+
+
+@router.post(
+    "/verificar-correo",
+    response_model=UsuarioResponse,
+    summary="Verificar mi correo con el código de 6 dígitos que me llegó",
+)
+def verificar_correo(
+    data: VerificarCorreoRequest, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)
+) -> UsuarioResponse:
+    """400 si el código es incorrecto o venció; 429 si falló demasiadas veces seguidas."""
+    try:
+        usuario = confirmar(db, get_user_by_id(db, user_id), data.codigo)
+    except ErrorVerificacion as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    return _a_respuesta(usuario, contar_calibraciones(db, usuario.id))
+
+
+@router.post(
+    "/verificar-correo/reenviar",
+    response_model=EnvioCodigoResponse,
+    summary="Pedir un código nuevo para verificar mi correo",
+)
+def reenviar_codigo_de_correo(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> EnvioCodigoResponse:
+    """El código anterior deja de servir. 429 si se pidió hace menos de un minuto; 503 si el servidor no envía correos."""
+    try:
+        reenviar(db, get_user_by_id(db, user_id))
+    except ErrorVerificacion as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    return EnvioCodigoResponse()
 
 
 @router.post(
@@ -458,7 +500,7 @@ async def subir_foto_perfil(
     user = get_user_by_id(db, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    contenido = await archivo.read()
+    contenido = await leer_con_tope(archivo, TAMANO_MAXIMO_AVATAR_BYTES, "La imagen")
     try:
         url = guardar_avatar(user_id, archivo.filename or "", contenido)
     except ValueError as error:
@@ -523,6 +565,7 @@ def generar_codigo_facilitador(
     """Genera un código de un solo uso que vence a los `minutos` indicados (15 por defecto). La persona nueva lo
     escribe al registrarse como facilitador. El código se devuelve una única vez: no se puede volver a ver."""
     fila, codigo = generar_codigo(db, solicitante_id, data.minutos, data.para)
+    auditar(db, solicitante_id, "codigo.generar", "codigo_invitacion", fila.id, f"vence en {data.minutos} min")
     return CodigoGeneradoResponse(
         id=fila.id, codigo=codigo, minutos=data.minutos, expira_en=fecha_a_iso(fila.expira_en), para=fila.para
     )
@@ -559,12 +602,13 @@ def listar_codigos_facilitador(
 )
 def anular_codigo_facilitador(
     codigo_id: int,
-    _: int = Depends(get_current_principal),
+    solicitante_id: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> None:
     """Borra un código sin usar, por ejemplo si se lo dio a la persona equivocada. 404 si no existe o ya se usó."""
     if not revocar_codigo(db, codigo_id):
         raise HTTPException(status_code=404, detail="Código no encontrado o ya usado")
+    auditar(db, solicitante_id, "codigo.anular", "codigo_invitacion", codigo_id)
 
 
 @router.patch(
@@ -585,10 +629,13 @@ def editar_usuario_ruta(
     objetivo = get_user_by_id(db, usuario_id)
     if not objetivo:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    campos = data.model_dump(exclude_unset=True)
     try:
-        actualizado = editar_usuario(db, objetivo, solicitante_id, data.model_dump(exclude_unset=True))
+        actualizado = editar_usuario(db, objetivo, solicitante_id, campos)
     except ErrorGestionUsuarios as error:
         raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    cambios = [f"{c}={campos[c]}" if c in ("rol", "activo") else c for c in sorted(campos)]
+    auditar(db, solicitante_id, "usuario.editar", "usuario", usuario_id, ", ".join(cambios))
     return _a_respuesta(actualizado, contar_calibraciones(db, actualizado.id))
 
 
@@ -609,6 +656,7 @@ def eliminar_usuario_ruta(
     objetivo = get_user_by_id(db, usuario_id)
     if not objetivo:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    rol_objetivo = objetivo.rol
     try:
         # Primero se validan las reglas sin tocar nada; recién después se borran las partidas y la cuenta.
         validar_eliminacion(db, objetivo, solicitante_id)
@@ -616,6 +664,48 @@ def eliminar_usuario_ruta(
         borradas = eliminar_usuario(db, objetivo, solicitante_id)
     except ErrorGestionUsuarios as error:
         raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    auditar(db, solicitante_id, "usuario.eliminar", "usuario", usuario_id, f"rol={rol_objetivo}, partidas={partidas}")
+    return EliminarUsuarioResponse(partidas=partidas, **borradas)
+
+
+@router.post(
+    "/me/eliminar",
+    response_model=EliminarUsuarioResponse,
+    summary="Darme de baja: eliminar mi propia cuenta y todos mis datos",
+)
+def eliminar_mi_cuenta(
+    data: EliminarMiCuentaRequest,
+    solicitud: Request,
+    usuario_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> EliminarUsuarioResponse:
+    """Baja de la propia cuenta, definitiva: borra el perfil, las partidas con sus jugadas, el nivel y su historial, las
+    conversaciones con el tutor, las medallas y la foto. Antes se vuelve a comprobar la identidad: la contraseña, o el correo
+    escrito completo si la cuenta entra solo con Google. Los intentos fallidos se limitan como en el login (429).
+
+    400 si es el único facilitador activo o la cuenta de la plataforma; 401 si la comprobación falla."""
+    usuario = get_user_by_id(db, usuario_id)
+    clave_intentos = f"baja:{_cliente_de(solicitud)}:{usuario_id}"
+    if intentos_bloqueados(clave_intentos):
+        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Esperá unos minutos y volvé a probar.")
+    if usuario.password_hash:
+        confirmado = bool(data.password) and verify_password(data.password, usuario.password_hash)
+        pista = "La contraseña no es correcta"
+    else:
+        confirmado = (data.confirmar_email or "").strip().lower() == usuario.email.lower()
+        pista = "Escribí tu correo completo para confirmar"
+    if not confirmado:
+        registrar_intento_fallido(clave_intentos)
+        raise HTTPException(status_code=401, detail=pista)
+    rol_usuario = usuario.rol
+    try:
+        validar_eliminacion(db, usuario, usuario_id, propia=True)
+        partidas = eliminar_partidas_de_usuario(usuario_id)
+        borradas = eliminar_usuario(db, usuario, usuario_id, propia=True)
+    except ErrorGestionUsuarios as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    olvidar_intentos(clave_intentos)
+    auditar(db, usuario_id, "usuario.baja_propia", "usuario", usuario_id, f"rol={rol_usuario}, partidas={partidas}")
     return EliminarUsuarioResponse(partidas=partidas, **borradas)
 
 

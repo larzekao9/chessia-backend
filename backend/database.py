@@ -121,6 +121,9 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
         "descripcion": "VARCHAR",
         "preset_ensenanza": "VARCHAR",
         "institucion_id": "INTEGER",
+        "correo_verificado": "BOOLEAN NOT NULL DEFAULT TRUE",
+        "codigo_verificacion_hash": "VARCHAR",
+        "codigo_verificacion_expira": "TIMESTAMP",
     },
     "curso": {
         "cupo": "INTEGER NOT NULL DEFAULT 60",

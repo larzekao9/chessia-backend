@@ -17,7 +17,7 @@ def _sembrar_partida_ia(cliente, email: str, jugadas_uci: list[str], evaluacione
     """Guarda una partida contra el motor ya terminada (1-0) con evaluaciones por jugada del jugador."""
     usuario_id = cliente.get(
         "/auth/me", headers=auth_header(cliente.post(
-            "/auth/login", json={"email": email, "password": "test123"}
+            "/auth/login", json={"email": email, "password": "test1234"}
         ).json()["tokens"]["access_token"])
     ).json()["id"]
     tablero = chess.Board()

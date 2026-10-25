@@ -318,7 +318,7 @@ def test_subir_foto_perfil_actualiza_avatar_url(cliente) -> None:
 
     respuesta = cliente.post(
         "/auth/foto",
-        files={"archivo": ("perfil.png", b"contenido-fake-de-imagen", "image/png")},
+        files={"archivo": ("perfil.png", b"\x89PNG\r\n\x1a\ncontenido-fake-de-imagen", "image/png")},
         headers=headers,
     )
 

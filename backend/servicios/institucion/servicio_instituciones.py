@@ -227,3 +227,28 @@ def alumnos_de(db: Session, institucion: InstitucionORM) -> list[dict]:
         }
         for alumno, curso, nombre_docente in filas
     ]
+
+
+def puede_supervisar(db: Session, facilitador: UsuarioORM, dueno_id: int | None) -> bool:
+    """`True` si `facilitador` puede mirar y tocar la partida de `dueno_id`: la plataforma, siempre; un docente o administrador,
+    la suya y las de los alumnos de sus cursos (o, si administra una institución, de los de todos sus docentes)."""
+    if dueno_id is not None and dueno_id == facilitador.id:
+        return True
+    visibles = ids_alumnos_visibles(db, facilitador)
+    return visibles is None or (dueno_id is not None and dueno_id in visibles)
+
+
+def ve_demostracion(db: Session, visor: UsuarioORM, dueno_id: int | None) -> bool:
+    """`True` si `visor` puede ver la demostración en vivo que transmite `dueno_id`.
+
+    La del dueño, siempre; la de la plataforma, todos; la de un docente, sus alumnos (y quienes administran su institución o
+    trabajan en ella). Sin esto, un alumno de una institución vería las transmisiones de otra."""
+    dueno = db.get(UsuarioORM, dueno_id) if dueno_id is not None else None
+    if dueno is None:
+        return False
+    if visor.id == dueno.id or es_principal(visor):
+        return True
+    visibles = ids_alumnos_visibles(db, dueno)
+    if visibles is None or visor.id in visibles:
+        return True
+    return visor.rol == "facilitador" and dueno.institucion_id is not None and visor.institucion_id == dueno.institucion_id

@@ -73,6 +73,12 @@ class UsuarioORM(Base):
     # de su curso) y en los facilitadores de la plataforma, que no necesitan ninguna.
     institucion_id: Mapped[int | None] = mapped_column(ForeignKey("institucion.id"), nullable=True, index=True)
     institucion: Mapped["InstitucionORM | None"] = relationship(foreign_keys=[institucion_id], lazy="select")
+    # Verificación del correo. Las cuentas anteriores y las de Google quedan verificadas; una cuenta nueva con contraseña queda sin
+    # verificar solo si el servidor tiene el envío de correo configurado, y se verifica con un código de 6 dígitos que vence a los
+    # 15 minutos (solo se guarda su huella).
+    correo_verificado: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    codigo_verificacion_hash: Mapped[str | None] = mapped_column(nullable=True)
+    codigo_verificacion_expira: Mapped[datetime | None] = mapped_column(nullable=True)
 
     partidas: Mapped[list["PartidaORM"]] = relationship(
         back_populates="usuario",
@@ -278,6 +284,24 @@ class CodigoInvitacionORM(Base):
     expira_en: Mapped[datetime] = mapped_column(nullable=False)
     usado_en: Mapped[datetime | None] = mapped_column(nullable=True)
     usado_por: Mapped[int | None] = mapped_column(ForeignKey("usuario.id"), nullable=True, index=True)
+
+
+class AuditoriaORM(Base):
+    """Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación (quién, qué y a quién).
+
+    `actor_id` y `objetivo_id` NO son claves foráneas a propósito: el registro tiene que sobrevivir a la baja de la cuenta de la
+    que habla. `detalle` es un texto corto sin datos personales (nada de correos ni nombres). Se conserva 1 año. Tabla nueva:
+    `Base.metadata.create_all` la crea sola."""
+
+    __tablename__ = "auditoria"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
+    actor_id: Mapped[int | None] = mapped_column(nullable=True, index=True)
+    accion: Mapped[str] = mapped_column(nullable=False, index=True)
+    objetivo_tipo: Mapped[str | None] = mapped_column(nullable=True)
+    objetivo_id: Mapped[int | None] = mapped_column(nullable=True)
+    detalle: Mapped[str | None] = mapped_column(nullable=True)
 
 
 TIPOS_INSTITUCION = ("academia", "colegio", "organizador")

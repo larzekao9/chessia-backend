@@ -21,6 +21,21 @@
 
 BEGIN;
 
+-- auditoria: Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación: quién, qué y a quién. Sin datos personales; se conserva 1 año.
+CREATE TABLE IF NOT EXISTS auditoria (
+	id SERIAL NOT NULL, 
+	creado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	actor_id INTEGER, 
+	accion VARCHAR NOT NULL, 
+	objetivo_tipo VARCHAR, 
+	objetivo_id INTEGER, 
+	detalle VARCHAR, 
+	PRIMARY KEY (id)
+);
+CREATE INDEX IF NOT EXISTS ix_auditoria_accion ON auditoria (accion);
+CREATE INDEX IF NOT EXISTS ix_auditoria_actor_id ON auditoria (actor_id);
+CREATE INDEX IF NOT EXISTS ix_auditoria_creado_en ON auditoria (creado_en);
+
 -- institucion: Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene un administrador, que es quien administra su suscripción.
 CREATE TABLE IF NOT EXISTS institucion (
 	id SERIAL NOT NULL, 
@@ -66,6 +81,9 @@ CREATE TABLE IF NOT EXISTS usuario (
 	descripcion VARCHAR, 
 	preset_ensenanza VARCHAR, 
 	institucion_id INTEGER, 
+	correo_verificado BOOLEAN DEFAULT 'true' NOT NULL, 
+	codigo_verificacion_hash VARCHAR, 
+	codigo_verificacion_expira TIMESTAMP WITHOUT TIME ZONE, 
 	PRIMARY KEY (id), 
 	FOREIGN KEY(institucion_id) REFERENCES institucion (id)
 );
@@ -257,6 +275,14 @@ CREATE INDEX IF NOT EXISTS ix_partida_usuario_id ON partida (usuario_id);
 CREATE INDEX IF NOT EXISTS ix_jugada_partida_id ON jugada (partida_id);
 
 -- Comentarios de tablas y columnas (visibles en pgAdmin y en el editor de Supabase)
+COMMENT ON TABLE auditoria IS 'Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación: quién, qué y a quién. Sin datos personales; se conserva 1 año.';
+COMMENT ON COLUMN auditoria.id IS 'Identificador del evento.';
+COMMENT ON COLUMN auditoria.creado_en IS 'Fecha y hora del evento.';
+COMMENT ON COLUMN auditoria.actor_id IS 'Usuario que hizo la acción. Sin clave foránea: el registro sobrevive a la baja de su cuenta. Nulo si fue el sistema.';
+COMMENT ON COLUMN auditoria.accion IS 'Qué se hizo, por ejemplo usuario.eliminar, usuario.baja_propia o institucion.crear.';
+COMMENT ON COLUMN auditoria.objetivo_tipo IS 'Sobre qué se hizo: usuario, institucion o codigo_invitacion.';
+COMMENT ON COLUMN auditoria.objetivo_id IS 'Identificador de lo afectado. Sin clave foránea, por la misma razón que actor_id.';
+COMMENT ON COLUMN auditoria.detalle IS 'Texto corto sin datos personales (por ejemplo, los campos cambiados o el rol). Opcional.';
 COMMENT ON TABLE institucion IS 'Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene un administrador, que es quien administra su suscripción.';
 COMMENT ON COLUMN institucion.id IS 'Identificador de la institución.';
 COMMENT ON COLUMN institucion.nombre IS 'Nombre de la institución (por ejemplo, Asociación Departamental de Ajedrez de Santa Cruz). Es único.';
@@ -288,6 +314,9 @@ COMMENT ON COLUMN usuario.edad IS 'Edad, de uso libre en el perfil.';
 COMMENT ON COLUMN usuario.descripcion IS 'Biografía o trayectoria breve, de uso libre en el perfil.';
 COMMENT ON COLUMN usuario.preset_ensenanza IS 'Tono con el que Turing habla: infantil, estandar o adultos. Lo elige el facilitador.';
 COMMENT ON COLUMN usuario.institucion_id IS 'Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma.';
+COMMENT ON COLUMN usuario.correo_verificado IS 'true si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña queda en false solo si el servidor tiene configurado el envío de correo.';
+COMMENT ON COLUMN usuario.codigo_verificacion_hash IS 'Huella SHA-256 del código de 6 dígitos enviado al correo. El código en claro no se guarda.';
+COMMENT ON COLUMN usuario.codigo_verificacion_expira IS 'Fecha y hora a partir de la cual el código de verificación ya no sirve (15 minutos).';
 COMMENT ON TABLE calibracion IS 'Una fila por partida terminada que sirvió para medir el nivel del jugador. Con las últimas tres se calcula su nivel vigente.';
 COMMENT ON COLUMN calibracion.id IS 'Identificador de la calibración.';
 COMMENT ON COLUMN calibracion.usuario_id IS 'Jugador medido.';
@@ -399,7 +428,7 @@ DECLARE
     tabla text;
     rol text;
 BEGIN
-    FOREACH tabla IN ARRAY ARRAY['institucion', 'participante', 'sesion', 'usuario', 'calibracion', 'codigo_invitacion', 'curso', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'inscripcion', 'jugada'] LOOP
+    FOREACH tabla IN ARRAY ARRAY['auditoria', 'institucion', 'participante', 'sesion', 'usuario', 'calibracion', 'codigo_invitacion', 'curso', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'inscripcion', 'jugada'] LOOP
         EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', current_schema(), tabla);
     END LOOP;
     FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
@@ -414,5 +443,5 @@ COMMIT;
 
 -- Verificación: las 7 tablas deben aparecer con rowsecurity = true.
 SELECT tablename, rowsecurity FROM pg_tables
-WHERE schemaname = current_schema() AND tablename IN ('institucion', 'participante', 'sesion', 'usuario', 'calibracion', 'codigo_invitacion', 'curso', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'inscripcion', 'jugada')
+WHERE schemaname = current_schema() AND tablename IN ('auditoria', 'institucion', 'participante', 'sesion', 'usuario', 'calibracion', 'codigo_invitacion', 'curso', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'inscripcion', 'jugada')
 ORDER BY tablename;

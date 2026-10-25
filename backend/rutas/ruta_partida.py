@@ -23,6 +23,7 @@ from backend.esquemas.partida_esquema import (
     TiempoAgotadoRequest,
 )
 from backend.modelos.partida import Partida
+from backend.servicios.institucion.servicio_instituciones import ids_alumnos_visibles, puede_supervisar, ve_demostracion
 from backend.rutas.ruta_auth import (
     get_current_facilitador,
     get_current_user,
@@ -151,9 +152,9 @@ def listar(
     sección 4.3 y 7 de PLAN_IMPLEMENTACION_COMPLETO.md) — pero es un registro
     real, no datos de ejemplo.
 
-    Requiere `Authorization: Bearer <token>`. El facilitador ve todas las
-    partidas (Registro de Partidas, Monitoreo); cualquier otro usuario solo ve
-    las suyas. Antes era público y exponía el ID y el nombre de cada
+    Requiere `Authorization: Bearer <token>`. La plataforma ve todas las
+    partidas (Registro de Partidas, Monitoreo); un docente o el administrador de una institución, las suyas y las de sus
+    alumnos; cualquier otro usuario solo ve las suyas. Antes era público y exponía el ID y el nombre de cada
     estudiante, lo que permitía tomar cualquier partida.
 
     Resuelve `usuario_nombre` con una sola consulta para todos los dueños
@@ -167,10 +168,13 @@ def listar(
     """
     usuario = get_user_by_id(db, usuario_id)
     es_facilitador = usuario is not None and usuario.rol == "facilitador"
+    # La plataforma ve todas; un docente o administrador, las suyas y las de sus alumnos (`None` = sin límite).
+    visibles = ids_alumnos_visibles(db, usuario) if es_facilitador else {usuario_id}
     partidas = [
         partida
         for partida in listar_partidas()
-        if partida.jugadas_jugador >= 1 and (es_facilitador or partida.usuario_id == usuario_id)
+        if partida.jugadas_jugador >= 1
+        and (visibles is None or partida.usuario_id == usuario_id or partida.usuario_id in visibles)
     ]
     ids_duenos = {partida.usuario_id for partida in partidas if partida.usuario_id is not None}
     usuarios_por_id = get_users_by_ids(db, ids_duenos)
@@ -189,7 +193,7 @@ def listar(
 
 @router.get("/demostracion-activa", response_model=EstadoPartidaResponse | None)
 def demostracion_activa(
-    _: int = Depends(get_current_user),
+    usuario_id: int = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> EstadoPartidaResponse | None:
     """Partida que el facilitador está transmitiendo en vivo a la clase ahora
@@ -212,7 +216,7 @@ def demostracion_activa(
     es realmente un error como para ser un 404.
     """
     partida = obtener_partida_en_demostracion()
-    if partida is None:
+    if partida is None or not ve_demostracion(db, get_user_by_id(db, usuario_id), partida.usuario_id):
         return None
     return _a_estado(partida, usuario_nombre=_resolver_nombre_dueno(db, partida.usuario_id))
 
@@ -268,9 +272,13 @@ def estado(
         partida = obtener_partida(partida_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
-    if partida.usuario_id is not None and partida.usuario_id != usuario_id and not partida.es_demostracion:
+    if partida.usuario_id is not None and partida.usuario_id != usuario_id:
         usuario = get_user_by_id(db, usuario_id)
-        if not usuario or usuario.rol != "facilitador":
+        if partida.es_demostracion:
+            permitido = usuario is not None and ve_demostracion(db, usuario, partida.usuario_id)
+        else:
+            permitido = usuario is not None and usuario.rol == "facilitador" and puede_supervisar(db, usuario, partida.usuario_id)
+        if not permitido:
             raise HTTPException(status_code=403, detail="La partida pertenece a otro usuario")
     usuario_nombre = _resolver_nombre_dueno(db, partida.usuario_id)
     return _a_estado(partida, usuario_nombre=usuario_nombre)
@@ -308,6 +316,9 @@ def actualizar_permisos_partida(
     if "usa_brazo" in campos and not es_principal(get_user_by_id(db, usuario_id_facilitador)):
         raise HTTPException(status_code=403, detail="Mover el brazo es solo para los administradores de la plataforma")
     try:
+        ajena = obtener_partida(partida_id)
+        if not puede_supervisar(db, get_user_by_id(db, usuario_id_facilitador), ajena.usuario_id):
+            raise HTTPException(status_code=403, detail="Esa partida no es de uno de tus alumnos")
         partida = actualizar_permisos(partida_id, campos, usuario_id_facilitador)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -496,11 +507,12 @@ def detectar_jugada_partida(
 @router.get("/{partida_id}/analisis-red", response_model=AnalisisRedResponse)
 def analisis_red_partida(
     partida_id: str,
-    _facilitador: int = Depends(get_current_facilitador),
+    facilitador_id: int = Depends(get_current_facilitador),
+    db: Session = Depends(get_db),
 ) -> AnalisisRedResponse:
     """Compara, jugada por jugada, lo que elegiría la red con lo que se jugó (HU6 ampliada).
 
-    Solo facilitador: puede mirar cualquier partida (de jugadores o suya). Recorre la partida
+    Solo facilitador: la plataforma puede mirar cualquier partida; un docente o administrador, las suyas y las de sus alumnos. Recorre la partida
     desde su posición inicial y pregunta a la red en cada una. La red decide sola; esto solo mide.
     404 si la partida no existe; 503 si falta el checkpoint de la red.
     """
@@ -508,6 +520,8 @@ def analisis_red_partida(
         partida = obtener_partida(partida_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    if not puede_supervisar(db, get_user_by_id(db, facilitador_id), partida.usuario_id):
+        raise HTTPException(status_code=403, detail="Esa partida no es de uno de tus alumnos")
     _rechazar_si_es_sala(partida)
     try:
         analisis = analizar_partida_con_red(
@@ -550,7 +564,7 @@ def calibrar_partida(
 
     if partida.usuario_id is not None and partida.usuario_id != usuario_id:
         solicitante = get_user_by_id(db, usuario_id)
-        if not solicitante or solicitante.rol != "facilitador":
+        if not solicitante or solicitante.rol != "facilitador" or not puede_supervisar(db, solicitante, partida.usuario_id):
             raise HTTPException(status_code=403, detail="La partida pertenece a otro usuario")
 
     # Excluir partidas humano vs humano (salas) de la calibración

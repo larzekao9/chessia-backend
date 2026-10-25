@@ -48,7 +48,7 @@ def test_subir_video_pieza_y_luego_listarlo(cliente) -> None:
 
     respuesta = cliente.post(
         "/facilitador/videos/rey",
-        files={"archivo": ("introduccion.mp4", b"contenido-fake-de-video", "video/mp4")},
+        files={"archivo": ("introduccion.mp4", b"\x00\x00\x00\x18ftypmp42contenido-fake-de-video", "video/mp4")},
         headers=headers,
     )
 

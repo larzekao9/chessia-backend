@@ -170,7 +170,7 @@ def test_eliminar_un_curso_no_borra_a_los_estudiantes(contexto) -> None:
 
 def _subir_video(cliente, facilitador, pieza: str) -> None:
     respuesta = cliente.post(
-        f"/facilitador/videos/{pieza}", files={"archivo": ("v.mp4", b"video", "video/mp4")}, headers=facilitador["headers"]
+        f"/facilitador/videos/{pieza}", files={"archivo": ("v.mp4", b"\x00\x00\x00\x18ftypmp42video", "video/mp4")}, headers=facilitador["headers"]
     )
     assert respuesta.status_code == 200, respuesta.text
 
@@ -325,7 +325,7 @@ def test_el_principal_reasigna_un_curso_y_los_estudiantes_siguen_con_el_nuevo_fa
     jugador = registrar("j@test.com")
     cliente.patch("/auth/me", json={"preset_ensenanza": "infantil"}, headers=viejo["headers"])
     cliente.patch("/auth/me", json={"preset_ensenanza": "adultos"}, headers=nuevo["headers"])
-    cliente.post("/facilitador/videos/dama", files={"archivo": ("v.mp4", b"video", "video/mp4")}, headers=nuevo["headers"])
+    cliente.post("/facilitador/videos/dama", files={"archivo": ("v.mp4", b"\x00\x00\x00\x18ftypmp42video", "video/mp4")}, headers=nuevo["headers"])
     curso = _crear(cliente, viejo)
     _unirse(cliente, jugador, curso["codigo"])
     _solo_principal(monkeypatch, "admin@test.com")
