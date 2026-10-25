@@ -17,7 +17,7 @@ POLITICA_DE_CONTENIDO = "; ".join(
         "font-src 'self' https://fonts.gstatic.com data:",
         "img-src 'self' data: blob: https:",
         "media-src 'self' blob:",
-        "connect-src 'self' https://accounts.google.com",
+        "connect-src 'self' blob: https://accounts.google.com",
         "frame-src https://accounts.google.com",
         "worker-src 'self' blob:",
         "object-src 'none'",
