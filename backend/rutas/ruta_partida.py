@@ -30,6 +30,7 @@ from backend.rutas.ruta_auth import (
     get_db,
 )
 from backend.servicios.auth import get_user_by_id, get_users_by_ids
+from backend.servicios.curso.servicio_cursos import es_principal
 from backend.servicios.calibracion import (
     calibracion_descartada,
     registrar_calibracion,
@@ -280,6 +281,7 @@ def actualizar_permisos_partida(
     partida_id: str,
     request: ActualizarPermisosPartidaRequest,
     usuario_id_facilitador: int = Depends(get_current_facilitador),
+    db: Session = Depends(get_db),
 ) -> EstadoPartidaResponse:
     """Prende o apaga, para esta partida, la simulación 3D, la cámara del
     tablero físico, la demostración en vivo (`es_demostracion`) y/o la
@@ -298,11 +300,15 @@ def actualizar_permisos_partida(
     El E-STOP del brazo no tiene toggle acá: es un control de seguridad,
     queda hardcodeado solo-facilitador en el frontend, no una función
     educativa que se pueda prender/apagar por partida.
+
+    `usa_brazo` mueve el brazo físico: solo lo puede tocar la plataforma (un facilitador principal); un docente o el
+    administrador de una institución reciben 403 si lo mandan.
     """
+    campos = request.model_dump(exclude_unset=True)
+    if "usa_brazo" in campos and not es_principal(get_user_by_id(db, usuario_id_facilitador)):
+        raise HTTPException(status_code=403, detail="Mover el brazo es solo para los administradores de la plataforma")
     try:
-        partida = actualizar_permisos(
-            partida_id, request.model_dump(exclude_unset=True), usuario_id_facilitador
-        )
+        partida = actualizar_permisos(partida_id, campos, usuario_id_facilitador)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ValueError as error:

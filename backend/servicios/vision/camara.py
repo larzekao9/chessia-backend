@@ -25,14 +25,21 @@ cada cámara tiene su fuente, su giro y su calibración (ver `CAMARAS`). Las fun
 """
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import threading
 import time
 from pathlib import Path
 
-import cv2
-import numpy as np
+# Antes de importar OpenCV (ver `backend/main.py`): sin esto, algunas webcams USB tardan 15 a 20 s en abrir con Media Foundation.
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 CAMARAS = ("principal", "secundaria")
 """Las cámaras fijas que puede usar la app. `principal` es obligatoria; `secundaria` es opcional (otro ángulo del mismo tablero) y
@@ -195,6 +202,39 @@ def capturar_foto_tablero(fuente: int | str | None = None, camara: str = "princi
 SEGUNDOS_INACTIVA = 15.0
 """Sin pedidos de fotos durante este tiempo, la cámara se suelta (otra app puede usarla) y se reabre al siguiente pedido."""
 
+SEGUNDOS_MAXIMOS_PARA_ABRIR = 15.0
+"""Lo más que se espera a que una cámara abra. Una webcam USB trabada (por ejemplo, tras cortarle el programa a la fuerza) puede quedarse
+abriendo sin terminar nunca, y como se abre con el cerrojo de la cámara tomado, dejaba colgado TODO lo que usa cámara: la vista en vivo,
+la búsqueda de cámaras y la calibración. Pasado este tiempo se avisa con un error claro en vez de esperar."""
+
+
+def _abrir_con_limite(fuente: int | str) -> cv2.VideoCapture:
+    """`cv2.VideoCapture(fuente)` con el backend de la app (`CAMARA_API`) y un tiempo máximo de espera (`SEGUNDOS_MAXIMOS_PARA_ABRIR`).
+
+    Raises:
+        RuntimeError: si la cámara no terminó de abrir a tiempo. Si abre más tarde, se suelta sola para no dejarla tomada.
+    """
+    api = _api_por_defecto() if isinstance(fuente, int) else None
+    estado: dict = {"abandonado": False}
+
+    def abrir() -> None:
+        camara = cv2.VideoCapture(fuente, api) if api is not None else cv2.VideoCapture(fuente)
+        if estado["abandonado"]:
+            camara.release()
+        else:
+            estado["camara"] = camara
+
+    hilo = threading.Thread(target=abrir, daemon=True, name=f"abrir-camara-{fuente}")
+    hilo.start()
+    hilo.join(timeout=SEGUNDOS_MAXIMOS_PARA_ABRIR)
+    if hilo.is_alive() or "camara" not in estado:
+        estado["abandonado"] = True
+        raise RuntimeError(
+            f"La cámara {fuente!r} no responde (más de {SEGUNDOS_MAXIMOS_PARA_ABRIR:.0f} s para abrir). "
+            "Desenchufala y volvé a enchufarla, o cerrá el programa que la esté usando."
+        )
+    return estado["camara"]
+
 
 class _CapturaContinua:
     """Mantiene la cámara abierta leyendo frames en un hilo, para que pedir una foto sea instantáneo y siempre actual.
@@ -214,8 +254,7 @@ class _CapturaContinua:
         self._listo = threading.Event()
         self._condicion = threading.Condition()
         self._numero = 0
-        api = _api_por_defecto() if isinstance(fuente, int) else None
-        self._camara = cv2.VideoCapture(fuente, api) if api is not None else cv2.VideoCapture(fuente)
+        self._camara = _abrir_con_limite(fuente)
         if not self._camara.isOpened():
             self._camara.release()
             raise RuntimeError(f"No se pudo abrir la cámara/fuente {fuente!r}")
@@ -304,8 +343,7 @@ def _captura_continua(fuente: int | str, camara: str = "principal") -> _CapturaC
 def _capturar_sin_cerrojo(fuente: int | str | None, camara: str = "principal") -> np.ndarray:
     """Cuerpo de `capturar_foto_tablero` sin captura continua, para comprobar que una fuente abre (con el cerrojo ya tomado)."""
     fuente_resuelta = fuente if fuente is not None else _fuente_por_defecto(camara)
-    api = _api_por_defecto() if isinstance(fuente_resuelta, int) else None
-    camara_cv = cv2.VideoCapture(fuente_resuelta, api) if api is not None else cv2.VideoCapture(fuente_resuelta)
+    camara_cv = _abrir_con_limite(fuente_resuelta)
     try:
         if not camara_cv.isOpened():
             raise RuntimeError(f"No se pudo abrir la cámara/fuente {fuente_resuelta!r}")
@@ -395,26 +433,85 @@ def quitar_camara_secundaria() -> None:
         os.environ.pop("CAMARA_FUENTE_2", None)
 
 
+CUADROS_PARA_MINIATURA = 6
+ANCHO_MINIATURA = 240
+SEGUNDOS_MAXIMOS_POR_CAMARA = 6.0
+"""Lo más que se espera a probar UNA cámara al buscarlas. Una cámara virtual (Iriun, DroidCam) o un driver trabado puede no contestar nunca,
+y como la búsqueda tiene tomado el cerrojo de la cámara, una sola colgada dejaba trabada también la vista en vivo."""
+
+
+def _probar_indice(indice: int, resultado: dict) -> None:
+    """Abre la cámara `indice` (con el mismo backend que usa la app, `CAMARA_API`) y lee un cuadro; deja `ancho`/`alto` en `resultado` si lo logra."""
+    api = _api_por_defecto()
+    camara = cv2.VideoCapture(indice, api) if api is not None else cv2.VideoCapture(indice)
+    try:
+        if not camara.isOpened():
+            return
+        # Una webcam necesita unos cuadros para ajustar la exposición: los primeros salen oscuros. Se leen unos pocos y se queda el último.
+        ultima = None
+        for _ in range(CUADROS_PARA_MINIATURA):
+            exito, imagen = camara.read()
+            if exito:
+                ultima = imagen
+        if ultima is None:
+            return
+        resultado["ancho"], resultado["alto"] = int(ultima.shape[1]), int(ultima.shape[0])
+        alto_mini = max(1, round(ultima.shape[0] * ANCHO_MINIATURA / ultima.shape[1]))
+        exito, jpg = cv2.imencode(".jpg", cv2.resize(ultima, (ANCHO_MINIATURA, alto_mini)), [cv2.IMWRITE_JPEG_QUALITY, 70])
+        if exito:
+            resultado["miniatura"] = "data:image/jpeg;base64," + base64.b64encode(jpg.tobytes()).decode("ascii")
+    finally:
+        camara.release()
+
+
 def listar_camaras(maximo: int = 6) -> list[dict]:
-    """Prueba los índices de cámara 0..`maximo`-1 (webcam, la del Mac, el iPhone por Continuidad…): cuáles abren y a qué resolución."""
-    encontradas = []
+    """Prueba los índices de cámara 0..`maximo`-1 (webcam, la del Mac, el iPhone por Continuidad…): cuáles abren, a qué resolución y cómo se ven.
+
+    Es rápido a propósito: todas las cámaras se prueban A LA VEZ (cada una en su hilo) y se espera hasta `SEGUNDOS_MAXIMOS_POR_CAMARA` en total, así que
+    tarda lo que tarde la más lenta y no la suma de todas. La que no contesta a tiempo se da por no disponible, en vez de dejar colgada la búsqueda
+    (y con ella la vista en vivo). Cada cámara disponible trae su `miniatura` (un JPEG chico como data URL), para reconocerla sin pedir una foto por cámara."""
+    medidas = [dict() for _ in range(maximo)]
     with _CERROJO_CAMARA:
         soltar_camara()
-        for indice in range(maximo):
-            camara = cv2.VideoCapture(indice)
-            try:
-                abierta = camara.isOpened()
-                exito, imagen = camara.read() if abierta else (False, None)
-            finally:
-                camara.release()
-            encontradas.append(
-                {"indice": indice, "disponible": bool(exito), "ancho": int(imagen.shape[1]) if exito else None, "alto": int(imagen.shape[0]) if exito else None}
-            )
-    return encontradas
+        hilos = [threading.Thread(target=_probar_indice, args=(i, medidas[i]), daemon=True, name=f"probar-camara-{i}") for i in range(maximo)]
+        for hilo in hilos:
+            hilo.start()
+        limite = time.monotonic() + SEGUNDOS_MAXIMOS_POR_CAMARA
+        for indice, hilo in enumerate(hilos):
+            hilo.join(timeout=max(0.0, limite - time.monotonic()))
+            if hilo.is_alive():
+                logger.warning("La cámara %s no contestó en %.0f s: se la da por no disponible", indice, SEGUNDOS_MAXIMOS_POR_CAMARA)
+    return [
+        {"indice": i, "disponible": "ancho" in m, "ancho": m.get("ancho"), "alto": m.get("alto"), "miniatura": m.get("miniatura")}
+        for i, m in enumerate(medidas)
+    ]
+
+
+SEGUNDOS_MAXIMOS_POR_MINIATURA = 20.0
+"""Lo más que se espera a la foto de una cámara al mostrar las miniaturas. Una cámara virtual (la de un programa que no está abierto) puede
+abrir y no entregar nunca una imagen: sin este límite, esa foto dejaba tomado el cerrojo y la pantalla se quedaba en «Mirando la cámara N…»."""
 
 
 def foto_de_indice(indice: int) -> np.ndarray:
-    """Un cuadro de la cámara `indice` (para reconocer cuál es cuál al elegir); no cambia la cámara en uso."""
+    """Un cuadro de la cámara `indice` (para reconocer cuál es cuál al elegir); no cambia la cámara en uso.
+
+    Raises:
+        RuntimeError: si no se pudo abrir, no entregó imagen o no contestó en `SEGUNDOS_MAXIMOS_POR_MINIATURA`."""
     with _CERROJO_CAMARA:
         soltar_camara()
-        return _capturar_sin_cerrojo(indice)
+        resultado: dict = {}
+
+        def tomar() -> None:
+            try:
+                resultado["imagen"] = _capturar_sin_cerrojo(indice)
+            except Exception as error:  # noqa: BLE001 — se vuelve a lanzar en el hilo que llama
+                resultado["error"] = error
+
+        hilo = threading.Thread(target=tomar, daemon=True, name=f"miniatura-camara-{indice}")
+        hilo.start()
+        hilo.join(timeout=SEGUNDOS_MAXIMOS_POR_MINIATURA)
+        if hilo.is_alive():
+            raise RuntimeError(f"La cámara {indice} no entregó una imagen en {SEGUNDOS_MAXIMOS_POR_MINIATURA:.0f} s")
+        if "error" in resultado:
+            raise resultado["error"]
+        return resultado["imagen"]

@@ -26,7 +26,7 @@ from backend.esquemas.vision_esquema import (
     EstadoCamaraResponse,
     ReconocerTableroResponse,
 )
-from backend.rutas.ruta_auth import get_current_facilitador, get_current_user
+from backend.rutas.ruta_auth import get_current_principal, get_current_user
 from backend.servicios.vision import camara as servicio_camara
 from backend.servicios.vision.fusion import fusionar_probabilidades
 from backend.servicios.vision.camara import _fuente_por_defecto, capturar_foto_tablero, flujo_de_frames
@@ -70,7 +70,7 @@ def _validar_camara(camara: str, permitir_todas: bool = False) -> str:
 
 
 @router.get("/estado", response_model=EstadoCamaraResponse)
-def estado_camara(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> EstadoCamaraResponse:
+def estado_camara(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> EstadoCamaraResponse:
     """Estado de la cámara fija: captura una foto de prueba y mide la latencia.
 
     Nunca devuelve 500: si la captura falla, `disponible=false` y el motivo en `error`.
@@ -216,14 +216,14 @@ def _estado_calibracion() -> CalibracionTableroResponse:
 
 
 @router.get("/calibracion", response_model=CalibracionTableroResponse)
-def obtener_calibracion(_facilitador_id: int = Depends(get_current_facilitador)) -> CalibracionTableroResponse:
+def obtener_calibracion(_facilitador_id: int = Depends(get_current_principal)) -> CalibracionTableroResponse:
     """Esquinas del tablero calibradas a mano (píxeles de la foto), o `calibrada=false` si se usa la detección automática."""
     return _estado_calibracion()
 
 
 @router.put("/calibracion", response_model=CalibracionTableroResponse)
 def guardar_calibracion(
-    cuerpo: CalibracionTableroRequest, _facilitador_id: int = Depends(get_current_facilitador)
+    cuerpo: CalibracionTableroRequest, _facilitador_id: int = Depends(get_current_principal)
 ) -> CalibracionTableroResponse:
     """Guarda las 4 esquinas marcadas por el facilitador."""
     puntos = _validar_esquinas(cuerpo.esquinas)
@@ -232,7 +232,7 @@ def guardar_calibracion(
 
 
 @router.delete("/calibracion", response_model=CalibracionTableroResponse)
-def borrar_calibracion(_facilitador_id: int = Depends(get_current_facilitador)) -> CalibracionTableroResponse:
+def borrar_calibracion(_facilitador_id: int = Depends(get_current_principal)) -> CalibracionTableroResponse:
     """Borra la calibración manual y vuelve a la detección automática."""
     tablero.ARCHIVO_ESQUINAS.unlink(missing_ok=True)
     return _estado_calibracion()
@@ -240,7 +240,7 @@ def borrar_calibracion(_facilitador_id: int = Depends(get_current_facilitador)) 
 
 @router.post("/dataset/foto", response_model=CapturaDatasetResponse)
 def capturar_foto_dataset(
-    cuerpo: CapturaDatasetRequest, _facilitador_id: int = Depends(get_current_facilitador)
+    cuerpo: CapturaDatasetRequest, _facilitador_id: int = Depends(get_current_principal)
 ) -> CapturaDatasetResponse:
     """Saca una foto de la cámara fija y guarda las 64 casillas etiquetadas con el FEN de piezas dado."""
     try:
@@ -256,7 +256,7 @@ def capturar_foto_dataset(
 async def subir_fotos_pieza(
     clase: str = Form(...),
     fotos: list[UploadFile] = File(...),
-    _facilitador_id: int = Depends(get_current_facilitador),
+    _facilitador_id: int = Depends(get_current_principal),
 ) -> FotosPiezaResponse:
     """Sube fotos de una pieza (o casilla vacía) de una clase; se guardan tal cual, sin enderezar ni recortar."""
     if clase not in CLASES:
@@ -285,7 +285,7 @@ class CorregirCasillaRequest(BaseModel):
 
 
 @router.post("/dataset/casilla")
-def corregir_casilla_dataset(cuerpo: CorregirCasillaRequest, _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def corregir_casilla_dataset(cuerpo: CorregirCasillaRequest, _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Guarda como muestra de `clase` la casilla `casilla` tal como la ven ahora las cámaras: para que el reentrenamiento aprenda del error."""
     try:
         return dataset_propio.guardar_casilla_corregida(cuerpo.casilla, cuerpo.clase, cuerpo.camaras)
@@ -300,7 +300,7 @@ async def subir_foto_tablero_dataset(
     fen_piezas: str = Form(...),
     solo_piezas: bool = Form(False),
     foto: UploadFile = File(...),
-    _facilitador_id: int = Depends(get_current_facilitador),
+    _facilitador_id: int = Depends(get_current_principal),
 ) -> CapturaDatasetResponse:
     """Como /dataset/foto pero con una foto del tablero subida a mano en vez de la cámara fija."""
     imagen = await _leer_foto_subida(foto)
@@ -312,7 +312,7 @@ async def subir_foto_tablero_dataset(
 
 
 @router.get("/dataset/control")
-def imagen_control_dataset(_facilitador_id: int = Depends(get_current_facilitador)) -> Response:
+def imagen_control_dataset(_facilitador_id: int = Depends(get_current_principal)) -> Response:
     """Última imagen de control (tablero enderezado con la grilla) como JPEG."""
     ruta = dataset_propio.ruta_imagen_control()
     if ruta is None:
@@ -461,7 +461,7 @@ def problemas_posicion(cuerpo: ProblemasPosicionRequest, _usuario_id: int = Depe
 
 
 @router.get("/dataset/resumen", response_model=ResumenDatasetResponse)
-def resumen_dataset(_facilitador_id: int = Depends(get_current_facilitador)) -> ResumenDatasetResponse:
+def resumen_dataset(_facilitador_id: int = Depends(get_current_principal)) -> ResumenDatasetResponse:
     """Muestras por clase del dataset propio."""
     return ResumenDatasetResponse(**dataset_propio.resumen())
 
@@ -601,7 +601,7 @@ def flujo_en_vivo(
 
 
 @router.get("/camaras")
-def listar_camaras(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def listar_camaras(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Cámaras que abre este equipo (índices 0 a 5) y cuáles están asignadas como principal y secundaria. Corta el video un instante."""
     asignadas = {
         nombre: (
@@ -620,7 +620,7 @@ def listar_camaras(_facilitador_id: int = Depends(get_current_facilitador)) -> d
 
 
 @router.get("/camaras/estado")
-def estado_de_las_camaras(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def estado_de_las_camaras(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Qué cámaras están EN USO (la secundaria solo si se la encendió) y cuáles tienen el tablero calibrado, sin abrir ni probar ninguna (barato: se consulta seguido).
 
     `secundaria_configurada` y `usar_secundaria` dicen si hay una secundaria elegida y si está encendida, para el interruptor de la pantalla de cámaras.
@@ -639,7 +639,7 @@ def estado_de_las_camaras(_facilitador_id: int = Depends(get_current_facilitador
 
 
 @router.get("/camaras/{indice}/foto")
-def foto_de_camara(indice: int, _facilitador_id: int = Depends(get_current_facilitador)) -> Response:
+def foto_de_camara(indice: int, _facilitador_id: int = Depends(get_current_principal)) -> Response:
     """Un cuadro de la cámara `indice`, para reconocer cuál es (webcam, Mac, iPhone…)."""
     if not 0 <= indice <= 9:
         raise HTTPException(status_code=422, detail="indice debe estar entre 0 y 9")
@@ -658,7 +658,7 @@ class SeleccionarCamaraRequest(BaseModel):
 
 
 @router.post("/camara")
-def seleccionar_camara(cuerpo: SeleccionarCamaraRequest, _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def seleccionar_camara(cuerpo: SeleccionarCamaraRequest, _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Asigna una fuente a la cámara `principal` o `secundaria` al instante (se recuerda entre reinicios). Cada cámara necesita una fuente distinta."""
     _validar_camara(cuerpo.camara)
     fuente: int | str = int(cuerpo.fuente) if cuerpo.fuente.isdigit() else cuerpo.fuente
@@ -672,7 +672,7 @@ def seleccionar_camara(cuerpo: SeleccionarCamaraRequest, _facilitador_id: int = 
 
 
 @router.delete("/camara/secundaria")
-def quitar_camara_secundaria(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def quitar_camara_secundaria(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Deja de usar la cámara secundaria (se sigue solo con la principal)."""
     servicio_camara.quitar_camara_secundaria()
     return {"camaras": servicio_camara.camaras_configuradas()}
@@ -683,7 +683,7 @@ class UsoSecundariaRequest(BaseModel):
 
 
 @router.post("/camara/secundaria/uso")
-def usar_camara_secundaria(cuerpo: UsoSecundariaRequest, _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def usar_camara_secundaria(cuerpo: UsoSecundariaRequest, _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Enciende o apaga la cámara secundaria sin tocar su configuración ni su calibración: apagada, la captura de fotos, el reconocimiento y
     las vistas en vivo usan solo la principal."""
     return {"usar_secundaria": servicio_camara.fijar_uso_secundaria(cuerpo.activa), "camaras": servicio_camara.camaras_en_uso()}
@@ -695,7 +695,7 @@ class RotacionRequest(BaseModel):
 
 
 @router.post("/camara/rotacion")
-def rotar_camara(cuerpo: RotacionRequest, _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def rotar_camara(cuerpo: RotacionRequest, _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Gira la imagen de una cámara (0, 90, 180 o 270 grados, horario). Hay que volver a calibrar el tablero de esa cámara."""
     _validar_camara(cuerpo.camara)
     try:
@@ -705,7 +705,7 @@ def rotar_camara(cuerpo: RotacionRequest, _facilitador_id: int = Depends(get_cur
 
 
 @router.get("/modelos/estado")
-def estado_de_los_modelos(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def estado_de_los_modelos(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Qué modelos hay entrenados y con qué recorte de cada casilla: ocupación, piezas de una vista y piezas de dos vistas."""
     from backend.servicios.vision import ocupacion, piezas
 
@@ -727,7 +727,7 @@ def estado_de_los_modelos(_facilitador_id: int = Depends(get_current_facilitador
 
 
 @router.get("/probar-piezas")
-def probar_piezas(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def probar_piezas(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Saca una foto y devuelve qué pieza reconoce el modelo en cada casilla, con su confianza y una imagen anotada (no guarda nada)."""
     try:
         return verificacion.probar_tablero()
@@ -740,7 +740,7 @@ def probar_piezas(_facilitador_id: int = Depends(get_current_facilitador)) -> di
 
 
 @router.get("/dataset/vista-previa")
-def vista_previa_dataset(casillas: str = "", _facilitador_id: int = Depends(get_current_facilitador)) -> Response:
+def vista_previa_dataset(casillas: str = "", _facilitador_id: int = Depends(get_current_principal)) -> Response:
     """Lo que se guardaría ahora (tablero con las casillas elegidas en verde + su recorte exacto), sin guardar nada."""
     try:
         contenido = dataset_propio.vista_previa([c for c in casillas.split(",") if c])
@@ -752,7 +752,7 @@ def vista_previa_dataset(casillas: str = "", _facilitador_id: int = Depends(get_
 
 
 @router.delete("/dataset/clase/{clase}", response_model=BorrarCapturaResponse)
-def borrar_clase_dataset(clase: str, _facilitador_id: int = Depends(get_current_facilitador)) -> BorrarCapturaResponse:
+def borrar_clase_dataset(clase: str, _facilitador_id: int = Depends(get_current_principal)) -> BorrarCapturaResponse:
     """Borra todas las fotos de una clase para volver a empezar con ella."""
     try:
         return BorrarCapturaResponse(borradas=dataset_propio.borrar_clase(clase))
@@ -761,13 +761,13 @@ def borrar_clase_dataset(clase: str, _facilitador_id: int = Depends(get_current_
 
 
 @router.post("/dataset/regenerar-ampliados")
-def regenerar_ampliados_dataset(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def regenerar_ampliados_dataset(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Vuelve a generar los recortes ampliados (`..._ampliado/<clase>/`) desde los cuadros completos guardados."""
     return dataset_propio.regenerar_ampliados()
 
 
 @router.get("/dataset/export")
-def exportar_dataset(_facilitador_id: int = Depends(get_current_facilitador)) -> FileResponse:
+def exportar_dataset(_facilitador_id: int = Depends(get_current_principal)) -> FileResponse:
     """ZIP del dataset propio (una carpeta por clase) para entrenar en Colab."""
     try:
         ruta = dataset_propio.exportar_zip()
@@ -783,7 +783,7 @@ def exportar_dataset(_facilitador_id: int = Depends(get_current_facilitador)) ->
 
 @router.delete("/dataset/captura/{captura_id}", response_model=BorrarCapturaResponse)
 def borrar_captura_dataset(
-    captura_id: str, _facilitador_id: int = Depends(get_current_facilitador)
+    captura_id: str, _facilitador_id: int = Depends(get_current_principal)
 ) -> BorrarCapturaResponse:
     """Deshace una captura borrando sus PNG."""
     try:
@@ -793,7 +793,7 @@ def borrar_captura_dataset(
 
 
 @router.post("/dataset/candidato", response_model=ReentrenarResponse)
-def entrenar_candidato(recorte: str = "ampliado", solo_posicion_actual: bool = True, incluir_secundaria: bool = False, _facilitador_id: int = Depends(get_current_facilitador)) -> ReentrenarResponse:
+def entrenar_candidato(recorte: str = "ampliado", solo_posicion_actual: bool = True, incluir_secundaria: bool = False, _facilitador_id: int = Depends(get_current_principal)) -> ReentrenarResponse:
     """Entrena en segundo plano (GPU del Mac si hay) un modelo candidato con el dataset propio y las casillas corregidas; solo reemplaza al actual si lo supera.
 
     `recorte`: `ampliado` (2D, la casilla con margen) o `volumen` (3D, la caja de la pieza). El modelo que gane guarda ese tipo y el reconocimiento lo sigue.
@@ -810,13 +810,13 @@ def entrenar_candidato(recorte: str = "ampliado", solo_posicion_actual: bool = T
 
 
 @router.get("/dataset/candidato/estado")
-def estado_candidato(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def estado_candidato(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """`{estado, progreso, resultado, log}` del entrenamiento del candidato (`inactivo`, `en_curso`, `terminado` o `error`)."""
     return dataset_propio.estado_entrenamiento_candidato()
 
 
 @router.post("/dataset/reentrenar", response_model=ReentrenarResponse)
-def reentrenar_clasificador(_facilitador_id: int = Depends(get_current_facilitador)) -> ReentrenarResponse:
+def reentrenar_clasificador(_facilitador_id: int = Depends(get_current_principal)) -> ReentrenarResponse:
     """Lanza el reentrenamiento del clasificador en segundo plano."""
     try:
         dataset_propio.iniciar_reentrenamiento()
@@ -828,6 +828,6 @@ def reentrenar_clasificador(_facilitador_id: int = Depends(get_current_facilitad
 
 
 @router.get("/dataset/reentrenar/estado", response_model=EstadoReentrenamientoResponse)
-def estado_reentrenamiento(_facilitador_id: int = Depends(get_current_facilitador)) -> EstadoReentrenamientoResponse:
+def estado_reentrenamiento(_facilitador_id: int = Depends(get_current_principal)) -> EstadoReentrenamientoResponse:
     """Estado del reentrenamiento y las últimas líneas de su salida."""
     return EstadoReentrenamientoResponse(**dataset_propio.estado_reentrenamiento())

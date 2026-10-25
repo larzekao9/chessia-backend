@@ -763,6 +763,26 @@ def _exigir_habilitado(ejecutor: EjecutorReal) -> None:
         raise ErrorControl(409, f"El brazo no está habilitado y libre (modo {modo}: {MODOS_TEXTO.get(modo, '?')}): habilitalo primero")
 
 
+def _armar_escena_emulador(tablero: chess.Board) -> None:
+    """Deja el emulador con las piezas del `tablero`; con el brazo real no hace nada.
+
+    El emulador no tiene un tablero de verdad: lo que la pinza «siente» son las piezas de su propio mundo, que arranca en la
+    posición inicial y no se entera de lo que pasa afuera (una prueba de captura en c5/d4, o una jugada que hizo la persona sobre el
+    tablero físico). Antes de cada movimiento se lo iguala al tablero que el sistema da por cierto, así la pinza encuentra las piezas
+    donde tienen que estar. Con el brazo real las piezas las pone la persona."""
+    if _estado.emulador is not None:
+        _estado.emulador[0].cargar_fen(tablero.fen())
+
+
+def _escena_de_prueba(origen: str, destino: str, tipo_pieza: str, captura: bool, tipo_capturada: str, al_cementerio: bool) -> chess.Board:
+    """Las piezas que necesita una prueba manual en el emulador: la que se mueve en `origen` y, si es captura, la capturada en `destino`."""
+    tablero = chess.Board(None)
+    tablero.set_piece_at(chess.parse_square(origen.lower()), chess.Piece.from_symbol(tipo_pieza.upper()))
+    if captura and not al_cementerio:
+        tablero.set_piece_at(chess.parse_square(destino.lower()), chess.Piece.from_symbol(tipo_capturada.lower()))
+    return tablero
+
+
 def _casilla_o_error(nombre: str) -> chess.Square:
     try:
         return chess.parse_square(nombre.lower())
@@ -868,6 +888,7 @@ def ejecutar_jugada(tablero_antes: chess.Board, jugada: chess.Move) -> None:
         _preparar_pinza(ejecutor)
         if ejecutor.angulos_cero is not None:
             ejecutor.cliente.mover_a_angulos(tuple(ejecutor.angulos_cero))
+        _armar_escena_emulador(tablero_antes)
         ejecutor.ejecutar_movimiento(tablero_antes, jugada)
         _estado.tarea.update(estado="terminada", mensaje="Listo")
     except Exception as error:  # noqa: BLE001 — se anota en el panel y se vuelve a lanzar
@@ -903,6 +924,8 @@ def mover_pieza(
                 _preparar_pinza(ejecutor)
                 if ejecutor.angulos_cero is not None:  # siempre se parte de la posición inicial
                     ejecutor.cliente.mover_a_angulos(tuple(ejecutor.angulos_cero))
+                if _estado.emulador is not None:  # el emulador no tiene piezas puestas a mano: se le arman las de la prueba
+                    _armar_escena_emulador(_escena_de_prueba(origen, destino, tipo_pieza, captura, tipo_capturada, al_cementerio))
                 ejecutor.ejecutar_pasos(pasos_fisicos)
                 _estado.tarea.update(estado="terminada", mensaje="Listo")
             except Exception as error:  # noqa: BLE001 — todo error va al panel

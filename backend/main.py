@@ -11,10 +11,15 @@ from dotenv import load_dotenv
 if os.environ.get("PYTEST_RUNNING") != "1":
     load_dotenv()
 
+# Antes de que cualquier módulo importe OpenCV: con las «transformaciones por hardware» de Media Foundation (lo que trae por defecto)
+# algunas webcams USB tardan 15 a 20 s en abrir (medido: 16 a 21 s contra 0,2 s apagadas). Se puede volver a prender con la variable en el .env.
+os.environ.setdefault("OPENCV_VIDEOIO_MSMF_ENABLE_HW_TRANSFORMS", "0")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from backend.seguridad import CabecerasSeguridad, origenes_permitidos
 from backend.rutas.ruta_brazo import router as brazo_router
 from backend.rutas.ruta_brazo_control import router as brazo_control_router
 from backend.rutas.ruta_partida_fisica import router as partida_fisica_router
@@ -30,6 +35,7 @@ from backend.rutas.ruta_aprendizaje import router as aprendizaje_router
 from backend.rutas.ruta_simulacion import router as simulacion_router
 from backend.rutas.ruta_facilitador import router as facilitador_router
 from backend.rutas.ruta_curso import router as curso_router
+from backend.rutas.ruta_institucion import router as institucion_router
 from backend.rutas.ruta_medallas import router as medallas_router
 from backend.rutas.ruta_tutor import router as tutor_router
 from backend.rutas.ruta_entrenamiento import router as entrenamiento_router
@@ -63,10 +69,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ajedrez Backend", lifespan=lifespan)
 
+_origenes = origenes_permitidos()
+app.add_middleware(CabecerasSeguridad)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_origenes,
+    allow_credentials=_origenes != ["*"],  # la sesión va en una cabecera Authorization, no en cookies: con `*` no hacen falta credenciales
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
@@ -87,6 +95,7 @@ app.include_router(aprendizaje_router)
 app.include_router(simulacion_router)
 app.include_router(facilitador_router)
 app.include_router(curso_router)
+app.include_router(institucion_router)
 app.include_router(medallas_router)
 app.include_router(tutor_router)
 app.include_router(entrenamiento_router)

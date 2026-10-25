@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
+from backend.esquemas.institucion_esquema import InstitucionResumenResponse
+
 Rol = Literal["jugador", "facilitador"]
 
 PresetEnsenanza = Literal["infantil", "estandar", "adultos"]
@@ -79,6 +81,10 @@ class UsuarioResponse(BaseModel):
     partidas_diagnostico: int = 3
     activo: bool = True
     es_principal: bool = False
+    es_admin_institucion: bool = False
+    institucion: InstitucionResumenResponse | None = None
+    """Perfil dentro de la plataforma: `es_principal` (la plataforma), `es_admin_institucion` (administra la institución de
+    `institucion`) o docente (facilitador con `institucion`). La pantalla arma el menú con estos datos."""
 
     class Config:
         from_attributes = True

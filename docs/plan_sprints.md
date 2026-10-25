@@ -807,6 +807,47 @@ celular y tablet, no solo confiar en que cada una haya heredado clases responsiv
 
 ---
 
+## Perfiles de acceso e instituciones (Paso 0 del modelo de negocio, Hebert)
+
+Antes de la suscripción se separaron los permisos. Hay cuatro perfiles; el backend los calcula y el menú sale de `/auth/me`
+(`es_principal`, `es_admin_institucion`, `institucion`):
+
+| Perfil | Quién es | Pantallas |
+|---|---|---|
+| Plataforma | facilitador cuyo correo está en `CORREOS_FACILITADORES` | todas: Cámara y Brazo, Entrenamiento del modelo, Gestión de Usuarios, Instituciones, más las de abajo |
+| Administrador de institución | `institucion.administrador_id` | Sala de Control, Monitoreo, Razonamiento Neuronal, Configuración de Enseñanza, Mis cursos, Mi institución (con la lista de sus docentes y de sus alumnos) |
+| Docente | facilitador con `usuario.institucion_id` | lo mismo, sin la lista de docentes |
+| Jugador | el resto | Sala de Control, Panel de Aprendizaje |
+
+- **Base de datos:** tabla nueva `institucion` y columna `usuario.institucion_id`. Los alumnos no guardan institución: se
+  deduce de alumno → curso → docente → institución. Un usuario pertenece a una sola institución y administra a lo sumo una.
+- **Backend:** guardas `get_current_principal` y `get_current_admin_institucion` (`ruta_auth.py`). Solo la plataforma toca
+  brazo, cámara, entrenamiento, códigos de invitación, edición y borrado de usuarios, y prende `usa_brazo` en una partida.
+  `GET /auth/usuarios` y el historial de un usuario: la plataforma ve a todos; un docente, sus alumnos; el administrador, los
+  de todos los docentes de su institución. Rutas nuevas en `/instituciones` (`ruta_institucion.py`).
+- **Frontend:** pantallas «Instituciones» (plataforma), «Mi institución» (el administrador ve además a sus docentes y alumnos) y «Mis cursos».
+- **Limitación conocida:** las partidas (`/partida/...`) todavía no se aíslan por institución, y Razonamiento Neuronal
+  (`/partida/{id}/analisis-red`) sigue abierto a cualquier facilitador. Crear cursos sin pertenecer a una institución sigue
+  permitido; el tope se aplicará con la suscripción.
+- **Sigue:** planes y precios, suscripción por institución (prueba/activa/vencida), tope de alumnos al inscribir, pago manual
+  confirmado por la plataforma e ingresos.
+
+---
+
+## Seguridad (revisión del 25/10/2026)
+
+Hecho: sin clave JWT por defecto (si falta `JWT_SECRET_KEY` se usa una al azar por arranque), límite de intentos del login (8 por
+IP y correo cada 10 min, respuesta 429), cabeceras de seguridad en toda respuesta (`backend/seguridad.py`; HSTS solo por HTTPS),
+política de contenido en modo «solo informar», CORS configurable con `CORS_ORIGINS`, clave de 8 caracteres al registrarse en la web.
+
+Pendiente, en este orden: (1) pasar la política de contenido a modo que bloquea cuando la consola esté limpia; (2) subir el mínimo de
+contraseña a 8 en el backend, de acuerdo con la app móvil; (3) verificación de correo (necesaria para el consentimiento de los
+padres); (4) registro de auditoría (quién borró o editó a quién) y plazo de conservación de los respaldos; (5) `pip-audit` (Python) y
+actualizar Vite (el aviso de `npm audit` afecta solo al servidor de desarrollo, no al sitio publicado); (6) revisar límites de
+tamaño y tipo de las subidas; (7) aislar las partidas por institución.
+
+---
+
 ## Trabajo adelantado fuera del plan original
 
 No estaba explícitamente en ninguna HU puntual, pero ya está construido y es una base útil

@@ -4,10 +4,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.rutas.ruta_auth import get_current_facilitador
+from backend.rutas.ruta_auth import get_current_principal
 from backend.servicios.partida import partida_fisica
 
-router = APIRouter(prefix="/partida-fisica", tags=["partida-fisica"], dependencies=[Depends(get_current_facilitador)])
+router = APIRouter(prefix="/partida-fisica", tags=["partida-fisica"], dependencies=[Depends(get_current_principal)])
 
 
 class IniciarPartidaFisicaRequest(BaseModel):

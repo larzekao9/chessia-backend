@@ -300,3 +300,16 @@ def test_el_diagnostico_lista_los_ultimos_comandos(cliente) -> None:
     registro = cliente.get("/brazo/control/diagnostico").json()
     assert registro and {"hora", "hilo", "comando", "resultado"} <= set(registro[-1])
     assert any(r["comando"].startswith("ModbusCreate") for r in registro) or any(r["comando"].startswith("RobotMode") for r in registro)
+
+
+def test_la_prueba_de_captura_del_panel_funciona_en_el_emulador_sin_piezas_puestas(cliente) -> None:
+    """El botón «Probar captura: peón negro c5 come peón blanco d4» no depende de lo que haya en el mundo del emulador (que arranca en la
+    posición inicial, con c5 y d4 vacías): se le arman las dos piezas antes de mover."""
+    _conectar(cliente)
+    cliente.post("/brazo/control/habilitar")
+    cuerpo = {"origen": "c5", "destino": "d4", "tipo_pieza": "p", "captura": True, "tipo_capturada": "p", "casilla_cementerio": 0}
+    assert cliente.post("/brazo/control/mover-pieza", json=cuerpo).status_code == 200
+    tarea = _esperar_tarea(cliente)
+    assert tarea["estado"] == "terminada", tarea["mensaje"]
+    piezas = control_brazo._estado.emulador[0].tablero_piezas()
+    assert piezas.get("d4", "").lower() == "p" and "c5" not in piezas  # el peón de c5 ahora está en d4; el de d4 salió al cementerio

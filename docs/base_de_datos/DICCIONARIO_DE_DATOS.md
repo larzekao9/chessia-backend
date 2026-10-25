@@ -3,7 +3,7 @@
 Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_de_datos/generar_esquema.py`. No editar a mano.
 
 - Motor: PostgreSQL 16. La aplicación crea las tablas sola al arrancar; el script equivalente está en [base_completa.sql](base_completa.sql); para producción en Supabase, [base_supabase_produccion.sql](base_supabase_produccion.sql).
-- Tablas: 13 (11 en uso, 2 reservadas para sesiones de clase).
+- Tablas: 14 (12 en uso, 2 reservadas para sesiones de clase).
 - Sin `DATABASE_URL` configurada, la aplicación guarda las partidas en memoria y no usa estas tablas para ellas.
 
 ## Relaciones
@@ -16,6 +16,8 @@ Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_d
 | `usuario` | `calibracion` | 1 a N | Un jugador acumula una calibración por cada partida que sirvió para medirlo. |
 | `usuario` | `exportacion_dataset` | 1 a N | Un facilitador acumula una fila por cada vez que descargó el dataset de partidas. |
 | `usuario` | `codigo_invitacion` | 1 a N | Un facilitador genera muchos códigos de invitación; cada uno lo usa, a lo sumo, una persona. |
+| `institucion` | `usuario` | 1 a N | Una institución agrupa a sus facilitadores (docentes); cada facilitador pertenece a una sola institución. |
+| `usuario` | `institucion` | 1 a 1 | Un usuario es el administrador de, a lo sumo, una institución. |
 | `usuario` | `curso` | 1 a N | Un facilitador crea varios cursos; cada curso tiene un solo facilitador. |
 | `curso` | `inscripcion` | 1 a N | Un curso tiene muchos jugadores inscritos. |
 | `usuario` | `medalla_personalizada` | 1 a N | Un facilitador crea muchas medallas propias. |
@@ -25,6 +27,20 @@ Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_d
 | `sesion` | `partida` | 1 a N | Opcional y reservada: una partida puede pertenecer a una sesión de clase. |
 | `usuario` | `partida` | 1 a N | Un usuario juega muchas salas como blancas; una sala tiene un blanco (opcional). |
 | `usuario` | `partida` | 1 a N | Un usuario juega muchas salas como negras; una sala tiene un negro (opcional). |
+
+## `institucion`
+
+Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene un administrador, que es quien administra su suscripción.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la institución. |
+| `nombre` | VARCHAR | no | único |  | Nombre de la institución (por ejemplo, `Asociación Departamental de Ajedrez de Santa Cruz`). Es único. |
+| `tipo` | VARCHAR | no |  | academia | `academia` (academias y clubes), `colegio` u `organizador` (de torneos y exhibiciones). |
+| `administrador_id` | INTEGER | sí | FK → usuario.id |  | Usuario que administra la institución. FK → usuario.id. Nulo hasta que se designa uno. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora de creación. |
 
 ## `participante`
 
@@ -73,6 +89,7 @@ Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
 | `edad` | INTEGER | sí |  |  | Edad, de uso libre en el perfil. |
 | `descripcion` | VARCHAR | sí |  |  | Biografía o trayectoria breve, de uso libre en el perfil. |
 | `preset_ensenanza` | VARCHAR | sí |  |  | Tono con el que Turing habla: `infantil`, `estandar` o `adultos`. Lo elige el facilitador. |
+| `institucion_id` | INTEGER | sí | FK → institucion.id |  | Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma. |
 
 ## `calibracion`
 
@@ -272,6 +289,8 @@ erDiagram
     usuario ||--o{ calibracion : tiene
     usuario ||--o{ exportacion_dataset : tiene
     usuario ||--o{ codigo_invitacion : tiene
+    institucion ||--o{ usuario : tiene
+    usuario ||--o{ institucion : tiene
     usuario ||--o{ curso : tiene
     curso ||--o{ inscripcion : tiene
     usuario ||--o{ medalla_personalizada : tiene
@@ -281,6 +300,13 @@ erDiagram
     sesion |o--o{ partida : tiene
     usuario |o--o{ partida : tiene
     usuario |o--o{ partida : tiene
+    institucion {
+        INTEGER id PK
+        VARCHAR nombre
+        VARCHAR tipo
+        INTEGER administrador_id FK
+        TIMESTAMP creado_en
+    }
     participante {
         INTEGER id PK
         VARCHAR nombre
@@ -307,6 +333,7 @@ erDiagram
         INTEGER edad
         VARCHAR descripcion
         VARCHAR preset_ensenanza
+        INTEGER institucion_id FK
     }
     calibracion {
         INTEGER id PK
@@ -430,6 +457,13 @@ Cada tabla es una clase ORM de `backend/modelos/tablas_orm.py`. Este diagrama cu
 
 ```mermaid
 classDiagram
+    class Institucion {
+        -INTEGER id
+        -VARCHAR nombre
+        -VARCHAR tipo
+        -INTEGER administrador_id
+        -TIMESTAMP creado_en
+    }
     class Participante {
         -INTEGER id
         -VARCHAR nombre
@@ -456,6 +490,7 @@ classDiagram
         -INTEGER edad
         -VARCHAR descripcion
         -VARCHAR preset_ensenanza
+        -INTEGER institucion_id
     }
     class Calibracion {
         -INTEGER id
@@ -577,6 +612,8 @@ classDiagram
     Usuario "1" --> "0..*" Calibracion
     Usuario "1" --> "0..*" ExportacionDataset
     Usuario "1" --> "0..*" CodigoInvitacion
+    Institucion "1" --> "0..*" Usuario
+    Usuario "1" --> "0..*" Institucion
     Usuario "1" --> "0..*" Curso
     Curso "1" --> "0..*" Inscripcion
     Usuario "1" --> "0..*" MedallaPersonalizada

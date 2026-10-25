@@ -9,7 +9,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 
 from backend.esquemas.vision_esquema import ComprobarCalibracionResponse, EstadoCalibracionResponse
-from backend.rutas.ruta_auth import get_current_facilitador
+from backend.rutas.ruta_auth import get_current_principal
 from backend.rutas.ruta_vision import _leer_foto_subida, _validar_esquinas
 from backend.servicios.vision import calibracion_camara, tablero, unificada
 from backend.servicios.vision import camara as servicio_camara
@@ -45,7 +45,7 @@ def _fuera_de_la_foto(puntos: dict[str, tuple[float, float]], ancho: int, alto: 
 
 
 @router.get("/estado", response_model=EstadoCalibracionResponse)
-def estado_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> EstadoCalibracionResponse:
+def estado_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> EstadoCalibracionResponse:
     """Si el tablero está calibrado y si la calibración sigue vigente para la cámara actual (resolución y fuente).
 
     Saca una foto para conocer la resolución; si la cámara no responde, `vigente` queda en `null` con el motivo.
@@ -62,7 +62,7 @@ def estado_calibracion(camara: str = "principal", _facilitador_id: int = Depends
 
 
 @router.delete("/quitar", response_model=EstadoCalibracionResponse)
-def quitar_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> EstadoCalibracionResponse:
+def quitar_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> EstadoCalibracionResponse:
     """Borra la calibración de `camara` (esquinas, metadata y foto de referencia). La principal vuelve a la detección automática."""
     _camara_valida(camara)
     for archivo in (tablero.archivo_esquinas(camara), calibracion_camara.ruta_metadata(camara), calibracion_camara.ruta_referencia(camara)):
@@ -71,7 +71,7 @@ def quitar_calibracion(camara: str = "principal", _facilitador_id: int = Depends
 
 
 @router.get("/unificada")
-def verificar_calibracion_unificada(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def verificar_calibracion_unificada(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Comprueba que las calibraciones de las dos cámaras describen el mismo tablero con la misma orientación (ver `unificada`).
 
     Toma una foto de cada cámara y devuelve el informe (`nivel`: bien, regular, mal u orientacion, con su mensaje y el error en píxeles y en
@@ -107,7 +107,7 @@ def _afinar_esquinas(imagen, puntos: dict) -> dict:
 
 
 @router.post("/ajustar")
-def ajustar_esquinas(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def ajustar_esquinas(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Recalcula al subpíxel las 4 esquinas de `camara` con las 49 esquinas internas del damero (ver `unificada.sugerir_esquinas`) y, si
     mejoran, las guarda como su calibración (con la foto nueva como referencia).
 
@@ -143,7 +143,7 @@ def ajustar_esquinas(camara: str = "principal", _facilitador_id: int = Depends(g
 
 
 @router.post("/aplicar-orientacion")
-def aplicar_orientacion(_facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def aplicar_orientacion(_facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Guarda las esquinas de la secundaria reordenadas para que coincidan con la principal (ver `unificada.corregir_orientacion`).
 
     Toma una foto nueva de cada cámara y vuelve a comparar. Devuelve `{aplicada, mensaje}`; si no hay desorden de esquinas o el reordenado
@@ -175,7 +175,7 @@ async def previsualizar_calibracion(
     esquinas: str = Form(...),
     foto: UploadFile = File(...),
     camara: str = Form("principal"),
-    _facilitador_id: int = Depends(get_current_facilitador),
+    _facilitador_id: int = Depends(get_current_principal),
 ) -> Response:
     """Tablero enderezado con la grilla 8x8 para las esquinas dadas sobre la foto dada, sin guardar nada (paso 3 del asistente)."""
     puntos = _esquinas_de_formulario(esquinas)
@@ -194,7 +194,7 @@ async def guardar_calibracion(
     esquinas: str = Form(...),
     foto: UploadFile = File(...),
     camara: str = Form("principal"),
-    _facilitador_id: int = Depends(get_current_facilitador),
+    _facilitador_id: int = Depends(get_current_principal),
 ) -> EstadoCalibracionResponse:
     """Guarda las esquinas con la metadata de la sesión (resolución de la foto, cámara, fecha) y la foto de referencia.
 
@@ -220,7 +220,7 @@ async def guardar_calibracion(
 async def comprobar_calibracion(
     foto: UploadFile | None = File(None),
     camara: str = Form("principal"),
-    _facilitador_id: int = Depends(get_current_facilitador),
+    _facilitador_id: int = Depends(get_current_principal),
 ) -> ComprobarCalibracionResponse:
     """Compara una foto nueva (la subida, o una de la cámara fija) con la de referencia: avisa si la cámara se movió."""
     _camara_valida(camara)

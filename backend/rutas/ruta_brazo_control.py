@@ -4,11 +4,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.rutas.ruta_auth import get_current_facilitador
+from backend.rutas.ruta_auth import get_current_principal
 from backend.servicios.brazo import control_brazo
 from backend.servicios.brazo.control_brazo import ErrorControl
 
-router = APIRouter(prefix="/brazo/control", tags=["brazo-control"], dependencies=[Depends(get_current_facilitador)])
+router = APIRouter(prefix="/brazo/control", tags=["brazo-control"], dependencies=[Depends(get_current_principal)])
 
 
 def _llamar(funcion, *args, **kwargs):

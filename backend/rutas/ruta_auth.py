@@ -8,8 +8,10 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm.exc import DetachedInstanceError
 
 from backend.database import DATABASE_URL, crear_fabrica_sesiones, crear_tablas, fecha_a_iso, obtener_engine
+from backend.esquemas.institucion_esquema import InstitucionResumenResponse
 from backend.esquemas.auth_esquema import (
     ActualizarPerfilRequest,
     CodigoGeneradoResponse,
@@ -57,11 +59,13 @@ from backend.servicios.auth.servicio_invitaciones import (
     generar_codigo,
     intentos_bloqueados,
     listar_codigos,
+    olvidar_intentos,
     registrar_intento_fallido,
     revocar_codigo,
     verificar_codigo,
 )
 from backend.servicios.curso.servicio_cursos import es_principal
+from backend.servicios.institucion.servicio_instituciones import administra_alguna, ids_alumnos_visibles
 from backend.servicios.partida.servicio_partida import eliminar_partidas_de_usuario
 from backend.servicios.usuario.servicio_avatar import guardar_avatar
 from backend.servicios.usuario.servicio_gestion_usuarios import (
@@ -93,7 +97,18 @@ def get_db() -> Iterator[Session]:
         db.close()
 
 
+def _institucion_de(user):
+    """La institución del usuario (o `None`); si la cuenta ya no está ligada a una sesión, se la da por ausente."""
+    if user.institucion_id is None:
+        return None
+    try:
+        return user.institucion
+    except DetachedInstanceError:
+        return None
+
+
 def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
+    institucion = _institucion_de(user)
     return UsuarioResponse(
         id=user.id,
         email=user.email,
@@ -112,6 +127,10 @@ def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
         partidas_diagnostico=PARTIDAS_DIAGNOSTICO,
         activo=user.activo,
         es_principal=es_principal(user),
+        es_admin_institucion=institucion is not None and institucion.administrador_id == user.id,
+        institucion=(
+            InstitucionResumenResponse(id=institucion.id, nombre=institucion.nombre, tipo=institucion.tipo) if institucion else None
+        ),
     )
 
 
@@ -173,6 +192,29 @@ def get_current_facilitador(
     if not user or user.rol != "facilitador":
         raise HTTPException(status_code=403, detail="Acceso solo para facilitadores")
     return user_id
+
+
+def get_current_principal(
+    user_id: int = Depends(get_current_facilitador),
+    db: Session = Depends(get_db),
+) -> int:
+    """Solo la plataforma: un facilitador principal (su correo está en `CORREOS_FACILITADORES`).
+
+    Es el único perfil que ve y puede usar lo que toca el hardware (brazo y cámara), el entrenamiento del modelo, la gestión
+    de usuarios y las instituciones. Un docente o el administrador de una institución reciben 403."""
+    if not es_principal(get_user_by_id(db, user_id)):
+        raise HTTPException(status_code=403, detail="Acceso solo para los administradores de la plataforma")
+    return user_id
+
+
+def get_current_admin_institucion(
+    user_id: int = Depends(get_current_facilitador),
+    db: Session = Depends(get_db),
+) -> int:
+    """El administrador de una institución (o la plataforma, que puede con todas). 403 para un docente sin ese cargo."""
+    if es_principal(get_user_by_id(db, user_id)) or administra_alguna(db, user_id):
+        return user_id
+    raise HTTPException(status_code=403, detail="Acceso solo para el administrador de la institución")
 
 
 @router.post(
@@ -256,15 +298,21 @@ def login_google(data: GoogleAuthRequest, solicitud: Request, db: Session = Depe
     response_model=AuthResponse,
     summary="Iniciar sesión",
 )
-def login(data: LoginRequest, db: Session = Depends(get_db)) -> AuthResponse:
+def login(data: LoginRequest, solicitud: Request, db: Session = Depends(get_db)) -> AuthResponse:
     """Autentica usuario y devuelve tokens de acceso.
 
     Si el cliente manda `rol_esperado` (la app móvil manda `jugador`) y la
-    cuenta tiene otro rol, responde 403 sin emitir tokens.
+    cuenta tiene otro rol, responde 403 sin emitir tokens. Los intentos fallidos se cuentan por IP y correo: pasado el límite
+    responde 429 durante unos minutos (frena el adivinar contraseñas sin bloquear a toda una clase detrás de la misma IP).
     """
+    clave_intentos = f"login:{_cliente_de(solicitud)}:{data.email.strip().lower()}"
+    if intentos_bloqueados(clave_intentos):
+        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Esperá unos minutos y volvé a probar.")
     user = authenticate_user(db, data.email, data.password)
     if not user:
+        registrar_intento_fallido(clave_intentos)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    olvidar_intentos(clave_intentos)
     if data.rol_esperado is not None and user.rol != data.rol_esperado:
         raise HTTPException(
             status_code=403,
@@ -422,14 +470,19 @@ async def subir_foto_perfil(
 @router.get(
     "/usuarios",
     response_model=list[UsuarioResponse],
-    summary="Listar todos los usuarios (solo facilitadores)",
+    summary="Listar usuarios (la plataforma, todos; un docente o administrador, sus alumnos)",
 )
 def listar_usuarios(
-    _: int = Depends(get_current_facilitador),
+    facilitador_id: int = Depends(get_current_facilitador),
     db: Session = Depends(get_db),
 ) -> list[UsuarioResponse]:
-    """Lista todos los usuarios registrados. Requiere rol facilitador."""
-    usuarios = db.scalars(select(UsuarioORM).order_by(UsuarioORM.creado_en.desc())).all()
+    """La plataforma (facilitador principal) ve a todos los usuarios. Un docente ve solo a los jugadores inscriptos en sus
+    cursos, y el administrador de una institución, a los de todos los docentes de su institución."""
+    consulta = select(UsuarioORM).order_by(UsuarioORM.creado_en.desc())
+    visibles = ids_alumnos_visibles(db, get_user_by_id(db, facilitador_id))
+    if visibles is not None:
+        consulta = consulta.where(UsuarioORM.id.in_(visibles))
+    usuarios = db.scalars(consulta).all()
     calibradas = contar_calibraciones_por_usuario(db, [u.id for u in usuarios])
     return [_a_respuesta(u, calibradas.get(u.id, 0)) for u in usuarios]
 
@@ -460,11 +513,11 @@ def verificar_codigo_facilitador(
     "/codigos-facilitador",
     response_model=CodigoGeneradoResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Generar un código de invitación para un nuevo facilitador (solo facilitadores)",
+    summary="Generar un código de invitación para un nuevo facilitador (solo la plataforma)",
 )
 def generar_codigo_facilitador(
     data: GenerarCodigoRequest,
-    solicitante_id: int = Depends(get_current_facilitador),
+    solicitante_id: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> CodigoGeneradoResponse:
     """Genera un código de un solo uso que vence a los `minutos` indicados (15 por defecto). La persona nueva lo
@@ -478,10 +531,10 @@ def generar_codigo_facilitador(
 @router.get(
     "/codigos-facilitador",
     response_model=list[CodigoInvitacionResponse],
-    summary="Códigos de invitación generados, con su estado (solo facilitadores)",
+    summary="Códigos de invitación generados, con su estado (solo la plataforma)",
 )
 def listar_codigos_facilitador(
-    _: int = Depends(get_current_facilitador),
+    _: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> list[CodigoInvitacionResponse]:
     """Los últimos códigos con su estado (vigente, usado o vencido) y quién los usó. No incluye su valor."""
@@ -502,11 +555,11 @@ def listar_codigos_facilitador(
 @router.delete(
     "/codigos-facilitador/{codigo_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Anular un código que todavía no se usó (solo facilitadores)",
+    summary="Anular un código que todavía no se usó (solo la plataforma)",
 )
 def anular_codigo_facilitador(
     codigo_id: int,
-    _: int = Depends(get_current_facilitador),
+    _: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> None:
     """Borra un código sin usar, por ejemplo si se lo dio a la persona equivocada. 404 si no existe o ya se usó."""
@@ -517,17 +570,17 @@ def anular_codigo_facilitador(
 @router.patch(
     "/usuarios/{usuario_id}",
     response_model=UsuarioResponse,
-    summary="Editar un usuario (solo facilitadores)",
+    summary="Editar un usuario (solo la plataforma)",
 )
 def editar_usuario_ruta(
     usuario_id: int,
     data: EditarUsuarioRequest,
-    solicitante_id: int = Depends(get_current_facilitador),
+    solicitante_id: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> UsuarioResponse:
     """Edita nombre, correo, rol, estado (activo/inactivo), edad, descripción y nivel de un usuario.
 
-    Requiere rol facilitador. 404 si no existe, 409 si el correo ya lo usa otra cuenta y 400 si el
+    Requiere ser facilitador principal (la plataforma). 404 si no existe, 409 si el correo ya lo usa otra cuenta y 400 si el
     cambio dejaría al sistema sin facilitadores activos o le quitaría el acceso al propio facilitador."""
     objetivo = get_user_by_id(db, usuario_id)
     if not objetivo:
@@ -542,17 +595,17 @@ def editar_usuario_ruta(
 @router.delete(
     "/usuarios/{usuario_id}",
     response_model=EliminarUsuarioResponse,
-    summary="Eliminar un usuario y todos sus datos (solo facilitadores)",
+    summary="Eliminar un usuario y todos sus datos (solo la plataforma)",
 )
 def eliminar_usuario_ruta(
     usuario_id: int,
-    solicitante_id: int = Depends(get_current_facilitador),
+    solicitante_id: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> EliminarUsuarioResponse:
     """Elimina definitivamente la cuenta y todo lo suyo: partidas con sus jugadas, calibraciones, mensajes
     con el tutor, descargas del dataset y foto de perfil. No se puede deshacer.
 
-    Requiere rol facilitador. 404 si no existe; 400 si es el propio facilitador o el único facilitador activo."""
+    Requiere ser facilitador principal (la plataforma). 404 si no existe; 400 si es el propio facilitador o el único facilitador activo."""
     objetivo = get_user_by_id(db, usuario_id)
     if not objetivo:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -569,16 +622,19 @@ def eliminar_usuario_ruta(
 @router.get(
     "/usuarios/{usuario_id}/historial-partidas",
     response_model=HistorialPartidasResponse,
-    summary="Historial de partidas de un usuario (solo facilitadores)",
+    summary="Historial de partidas de un usuario (la plataforma, cualquiera; un docente o administrador, sus alumnos)",
 )
 def historial_partidas_usuario(
     usuario_id: int,
     limit: int = 10,
     offset: int = 0,
-    _: int = Depends(get_current_facilitador),
+    facilitador_id: int = Depends(get_current_facilitador),
     db: Session = Depends(get_db),
 ) -> HistorialPartidasResponse:
-    """Historial paginado de partidas de un usuario específico. Requiere rol facilitador."""
+    """Historial paginado de partidas de un usuario. Un docente o administrador solo ve el de sus propios alumnos."""
     if not get_user_by_id(db, usuario_id):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    visibles = ids_alumnos_visibles(db, get_user_by_id(db, facilitador_id))
+    if visibles is not None and usuario_id != facilitador_id and usuario_id not in visibles:
+        raise HTTPException(status_code=403, detail="Ese jugador no está en tus cursos")
     return HistorialPartidasResponse(**obtener_historial_partidas(db, usuario_id, limit, offset))

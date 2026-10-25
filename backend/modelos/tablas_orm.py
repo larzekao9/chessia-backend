@@ -69,6 +69,10 @@ class UsuarioORM(Base):
     # `ActualizarPerfilRequest.preset_ensenanza`: les llega a los jugadores
     # inscritos en sus cursos (`CursoORM` / `InscripcionORM`).
     preset_ensenanza: Mapped[str | None] = mapped_column(nullable=True)
+    # Institución a la que pertenece un facilitador (docente o administrador). Nulo en los jugadores (su institución se deduce
+    # de su curso) y en los facilitadores de la plataforma, que no necesitan ninguna.
+    institucion_id: Mapped[int | None] = mapped_column(ForeignKey("institucion.id"), nullable=True, index=True)
+    institucion: Mapped["InstitucionORM | None"] = relationship(foreign_keys=[institucion_id], lazy="select")
 
     partidas: Mapped[list["PartidaORM"]] = relationship(
         back_populates="usuario",
@@ -274,6 +278,27 @@ class CodigoInvitacionORM(Base):
     expira_en: Mapped[datetime] = mapped_column(nullable=False)
     usado_en: Mapped[datetime | None] = mapped_column(nullable=True)
     usado_por: Mapped[int | None] = mapped_column(ForeignKey("usuario.id"), nullable=True, index=True)
+
+
+TIPOS_INSTITUCION = ("academia", "colegio", "organizador")
+"""Tipos de institución cliente (los segmentos del CANVAS): academias y clubes, colegios y organizadores de torneos."""
+
+
+class InstitucionORM(Base):
+    """Institución cliente de la plataforma (una asociación, un colegio, un organizador de torneos). Agrupa a sus docentes
+    (`usuario.institucion_id`) y tiene un administrador, que es quien después administra su suscripción. Tabla nueva:
+    `Base.metadata.create_all` la crea sola."""
+
+    __tablename__ = "institucion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    nombre: Mapped[str] = mapped_column(unique=True, nullable=False)
+    tipo: Mapped[str] = mapped_column(nullable=False, default="academia", server_default="academia")
+    # `use_alter`: usuario e institución se apuntan entre sí; esta restricción se agrega al final, cuando existen las dos tablas.
+    administrador_id: Mapped[int | None] = mapped_column(
+        ForeignKey("usuario.id", use_alter=True, name="fk_institucion_administrador"), nullable=True
+    )
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class CursoORM(Base):

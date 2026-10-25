@@ -14,6 +14,17 @@
 -- Para producción en Supabase usar base_supabase_produccion.sql.
 -- =====================================================================
 
+-- institucion: Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene un administrador, que es quien administra su suscripción.
+CREATE TABLE institucion (
+	id SERIAL NOT NULL, 
+	nombre VARCHAR NOT NULL, 
+	tipo VARCHAR DEFAULT 'academia' NOT NULL, 
+	administrador_id INTEGER, 
+	creado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL, 
+	PRIMARY KEY (id), 
+	UNIQUE (nombre)
+);
+
 -- participante: Estudiantes de un curso, para sesiones del facilitador.
 CREATE TABLE participante (
 	id SERIAL NOT NULL, 
@@ -47,10 +58,13 @@ CREATE TABLE usuario (
 	edad INTEGER, 
 	descripcion VARCHAR, 
 	preset_ensenanza VARCHAR, 
-	PRIMARY KEY (id)
+	institucion_id INTEGER, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(institucion_id) REFERENCES institucion (id)
 );
 CREATE UNIQUE INDEX ix_usuario_email ON usuario (email);
 CREATE INDEX ix_usuario_google_id ON usuario (google_id);
+CREATE INDEX ix_usuario_institucion_id ON usuario (institucion_id);
 
 -- calibracion: Una fila por partida terminada que sirvió para medir el nivel del jugador. Con las últimas tres se calcula su nivel vigente.
 CREATE TABLE calibracion (
@@ -227,7 +241,17 @@ CREATE TABLE jugada (
 	FOREIGN KEY(partida_id) REFERENCES partida (id)
 );
 
+-- Claves foráneas entre tablas que se apuntan entre sí
+ALTER TABLE institucion DROP CONSTRAINT IF EXISTS fk_institucion_administrador;
+ALTER TABLE institucion ADD CONSTRAINT fk_institucion_administrador FOREIGN KEY (administrador_id) REFERENCES usuario (id);
+
 -- Comentarios de tablas y columnas (visibles en pgAdmin y en el editor de Supabase)
+COMMENT ON TABLE institucion IS 'Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene un administrador, que es quien administra su suscripción.';
+COMMENT ON COLUMN institucion.id IS 'Identificador de la institución.';
+COMMENT ON COLUMN institucion.nombre IS 'Nombre de la institución (por ejemplo, Asociación Departamental de Ajedrez de Santa Cruz). Es único.';
+COMMENT ON COLUMN institucion.tipo IS 'academia (academias y clubes), colegio u organizador (de torneos y exhibiciones).';
+COMMENT ON COLUMN institucion.administrador_id IS 'Usuario que administra la institución. FK → usuario.id. Nulo hasta que se designa uno.';
+COMMENT ON COLUMN institucion.creado_en IS 'Fecha y hora de creación.';
 COMMENT ON TABLE participante IS 'Estudiantes de un curso, para sesiones del facilitador.';
 COMMENT ON COLUMN participante.id IS 'Identificador del participante.';
 COMMENT ON COLUMN participante.nombre IS 'Nombre del participante.';
@@ -252,6 +276,7 @@ COMMENT ON COLUMN usuario.rango_estimado IS 'Principiante (niveles 0-6), Interme
 COMMENT ON COLUMN usuario.edad IS 'Edad, de uso libre en el perfil.';
 COMMENT ON COLUMN usuario.descripcion IS 'Biografía o trayectoria breve, de uso libre en el perfil.';
 COMMENT ON COLUMN usuario.preset_ensenanza IS 'Tono con el que Turing habla: infantil, estandar o adultos. Lo elige el facilitador.';
+COMMENT ON COLUMN usuario.institucion_id IS 'Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma.';
 COMMENT ON TABLE calibracion IS 'Una fila por partida terminada que sirvió para medir el nivel del jugador. Con las últimas tres se calcula su nivel vigente.';
 COMMENT ON COLUMN calibracion.id IS 'Identificador de la calibración.';
 COMMENT ON COLUMN calibracion.usuario_id IS 'Jugador medido.';

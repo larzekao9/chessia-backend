@@ -1,6 +1,8 @@
 import fnmatch
 import json
+import logging
 import os
+import secrets
 import urllib.error
 import urllib.request
 import uuid
@@ -19,7 +21,13 @@ from backend.servicios.auth.servicio_invitaciones import consumir_codigo
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # Configuración JWT
-SECRET_KEY = os.environ.get("JWT_SECRET_KEY", "cambia-esto-en-produccion-usar-variable-entorno")
+logger = logging.getLogger(__name__)
+SECRET_KEY = os.environ.get("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    # Sin clave definida se usa una al azar de este arranque: nadie puede falsificar sesiones con un valor que se lee en el repo.
+    # Las sesiones abiertas se pierden en cada reinicio, así que en el servidor hay que definir JWT_SECRET_KEY en el entorno.
+    SECRET_KEY = secrets.token_urlsafe(48)
+    logger.warning("JWT_SECRET_KEY no está definida: se usa una clave temporal y las sesiones no sobreviven a un reinicio")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 12  # 12 horas para sesiones de laboratorio
 REFRESH_TOKEN_EXPIRE_DAYS = 7

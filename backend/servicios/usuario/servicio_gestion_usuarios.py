@@ -18,6 +18,7 @@ from backend.modelos.tablas_orm import (
 )
 from backend.servicios.auth import actualizar_perfil, get_user_by_email
 from backend.servicios.curso.servicio_cursos import retirar_usuario_de_cursos
+from backend.servicios.institucion.servicio_instituciones import retirar_administrador
 from backend.servicios.medallas.servicio_creacion import retirar_usuario_de_medallas
 from backend.servicios.usuario.servicio_avatar import eliminar_avatar
 
@@ -112,6 +113,7 @@ def eliminar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int) -> 
     db.execute(update(CodigoInvitacionORM).where(CodigoInvitacionORM.usado_por == objetivo.id).values(usado_por=None))
     # Si es jugador sale de su curso; si es facilitador se borran sus cursos (sus estudiantes quedan sin curso).
     retirar_usuario_de_cursos(db, objetivo.id)
+    retirar_administrador(db, objetivo.id)  # si administraba una institución, esta queda sin administrador
     retirar_usuario_de_medallas(db, objetivo.id)  # sus medallas ganadas y, si es facilitador, las que creó
     eliminar_avatar(objetivo.id)
     db.delete(objetivo)

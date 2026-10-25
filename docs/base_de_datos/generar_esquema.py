@@ -68,6 +68,11 @@ TABLAS: dict[str, tuple[str, str]] = {
         "como facilitador. Solo se guarda su hash.",
         "En uso",
     ),
+    "institucion": (
+        "Institución cliente de la plataforma (asociación, colegio u organizador de torneos). Agrupa a sus docentes y tiene "
+        "un administrador, que es quien administra su suscripción.",
+        "En uso",
+    ),
     "curso": (
         "Grupo de estudiantes de un facilitador. Los jugadores entran con un código del curso, que sirve para "
         "muchos y el facilitador puede volver a ver y regenerar.",
@@ -200,6 +205,16 @@ COLUMNAS: dict[tuple[str, str], str] = {
     ("codigo_invitacion", "expira_en"): "Fecha y hora a partir de la cual el código ya no sirve.",
     ("codigo_invitacion", "usado_en"): "Fecha y hora en que se usó. Nulo mientras no se haya usado: sirve una sola vez.",
     ("codigo_invitacion", "usado_por"): "Usuario que se registró con este código.",
+    ("usuario", "institucion_id"): (
+        "Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, "
+        "cuya institución se deduce de su curso, y en los facilitadores de la plataforma."
+    ),
+    # institucion
+    ("institucion", "id"): "Identificador de la institución.",
+    ("institucion", "nombre"): "Nombre de la institución (por ejemplo, `Asociación Departamental de Ajedrez de Santa Cruz`). Es único.",
+    ("institucion", "tipo"): "`academia` (academias y clubes), `colegio` u `organizador` (de torneos y exhibiciones).",
+    ("institucion", "administrador_id"): "Usuario que administra la institución. FK → usuario.id. Nulo hasta que se designa uno.",
+    ("institucion", "creado_en"): "Fecha y hora de creación.",
     # curso
     ("curso", "id"): "Identificador del curso.",
     ("curso", "nombre"): "Nombre del curso, que elige el facilitador (por ejemplo, `Ajedrez 1ro A`).",
@@ -258,6 +273,8 @@ RELACIONES = [
     ("usuario", "calibracion", "1 a N", "Un jugador acumula una calibración por cada partida que sirvió para medirlo."),
     ("usuario", "exportacion_dataset", "1 a N", "Un facilitador acumula una fila por cada vez que descargó el dataset de partidas."),
     ("usuario", "codigo_invitacion", "1 a N", "Un facilitador genera muchos códigos de invitación; cada uno lo usa, a lo sumo, una persona."),
+    ("institucion", "usuario", "1 a N", "Una institución agrupa a sus facilitadores (docentes); cada facilitador pertenece a una sola institución."),
+    ("usuario", "institucion", "1 a 1", "Un usuario es el administrador de, a lo sumo, una institución."),
     ("usuario", "curso", "1 a N", "Un facilitador crea varios cursos; cada curso tiene un solo facilitador."),
     ("curso", "inscripcion", "1 a N", "Un curso tiene muchos jugadores inscritos."),
     ("usuario", "medalla_personalizada", "1 a N", "Un facilitador crea muchas medallas propias."),
@@ -334,6 +351,23 @@ def _sql_tablas(dialecto, *, si_no_existe: bool) -> list[str]:
     return salida
 
 
+def _sql_restricciones_pendientes() -> list[str]:
+    """Claves foráneas que se agregan al final (`use_alter`): `CREATE TABLE` no las trae porque las dos tablas se apuntan entre sí.
+    Se escriben de forma que se puedan volver a correr sin error."""
+    salida: list[str] = []
+    for tabla in Base.metadata.sorted_tables:
+        for restriccion in sorted(tabla.foreign_key_constraints, key=lambda r: r.name or ""):
+            if not restriccion.use_alter:
+                continue
+            elemento = restriccion.elements[0]
+            salida.append(
+                f"ALTER TABLE {tabla.name} DROP CONSTRAINT IF EXISTS {restriccion.name};\n"
+                f"ALTER TABLE {tabla.name} ADD CONSTRAINT {restriccion.name} FOREIGN KEY ({restriccion.column_keys[0]}) "
+                f"REFERENCES {elemento.column.table.name} ({elemento.column.name});"
+            )
+    return (["-- Claves foráneas entre tablas que se apuntan entre sí"] + salida + [""]) if salida else []
+
+
 def _sql_comentarios() -> list[str]:
     salida = ["-- Comentarios de tablas y columnas (visibles en pgAdmin y en el editor de Supabase)"]
     for tabla in Base.metadata.sorted_tables:
@@ -365,6 +399,7 @@ def generar_sql() -> str:
         "",
     ]
     salida += _sql_tablas(postgresql.dialect(), si_no_existe=False)
+    salida += _sql_restricciones_pendientes()
     salida += _sql_comentarios()
     return "\n".join(salida) + "\n"
 
@@ -406,6 +441,7 @@ def generar_sql_supabase() -> str:
         "",
     ]
     salida += _sql_tablas(postgresql.dialect(), si_no_existe=True)
+    salida += _sql_restricciones_pendientes()
     salida.append("-- Índices extra para consultas por clave foránea")
     for nombre, tabla, columna in _INDICES_PRODUCCION:
         salida.append(f"CREATE INDEX IF NOT EXISTS {nombre} ON {tabla} ({columna});")

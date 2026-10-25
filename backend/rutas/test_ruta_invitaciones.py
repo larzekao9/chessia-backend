@@ -8,8 +8,9 @@ from backend.rutas.test_ruta_gestion_usuarios import contexto  # noqa: F401  (fi
 
 
 def _sin_atajos(monkeypatch) -> None:
-    """Quita el correo autorizado que `conftest.py` pone para el resto de los tests: así rige la regla real."""
-    monkeypatch.delenv("CORREOS_FACILITADORES", raising=False)
+    """Deja autorizado solo a `prof@test.com` (la plataforma) en vez del comodín de `conftest.py`: así rige la regla real y
+    las demás cuentas necesitan un código de invitación."""
+    monkeypatch.setenv("CORREOS_FACILITADORES", "prof@test.com")
 
 
 def _generar(cliente, headers, **cuerpo) -> dict:

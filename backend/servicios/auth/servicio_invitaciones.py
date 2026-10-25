@@ -63,6 +63,12 @@ def registrar_intento_fallido(clave: str) -> None:
         _fallos.setdefault(clave, []).append(ahora)
 
 
+def olvidar_intentos(clave: str) -> None:
+    """Borra los intentos fallidos de `clave` (por ejemplo, tras un login correcto)."""
+    with _candado:
+        _fallos.pop(clave, None)
+
+
 def reiniciar_intentos() -> None:
     """Borra el conteo de intentos fallidos (lo usan los tests)."""
     with _candado:

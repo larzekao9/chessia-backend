@@ -13,7 +13,7 @@ from backend.esquemas.entrenamiento_esquema import (
     TuringPorNivelItem,
     TuringPorNivelResponse,
 )
-from backend.rutas.ruta_auth import get_current_facilitador, get_db
+from backend.rutas.ruta_auth import get_current_principal, get_db
 from backend.servicios.usuario.servicio_estadisticas import calcular_turing_por_nivel
 from backend.servicios.entrenamiento.servicio_dataset import (
     SinPartidasValidasError,
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/entrenamiento", tags=["entrenamiento"])
 
 @router.get("/estado", response_model=EstadoEntrenamientoResponse)
 def estado(
-    _: int = Depends(get_current_facilitador),
+    _: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> EstadoEntrenamientoResponse:
     """Progreso hacia el próximo reentrenamiento del modelo — panel del
@@ -37,7 +37,7 @@ def estado(
 @router.post("/dataset")
 def descargar_dataset(
     request: DescargarDatasetRequest,
-    facilitador_id: int = Depends(get_current_facilitador),
+    facilitador_id: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> Response:
     """Descarga el dataset de partidas válidas como un ZIP (PGN + CSV +
@@ -56,7 +56,7 @@ def descargar_dataset(
 
 @router.get("/turing-por-nivel", response_model=TuringPorNivelResponse)
 def turing_por_nivel(
-    _: int = Depends(get_current_facilitador),
+    _: int = Depends(get_current_principal),
     db: Session = Depends(get_db),
 ) -> TuringPorNivelResponse:
     """Cómo juega Turing según el nivel de la partida, frente a Stockfish. Solo facilitador.

@@ -10,7 +10,7 @@ import cv2
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
-from backend.rutas.ruta_auth import get_current_facilitador
+from backend.rutas.ruta_auth import get_current_principal
 from backend.servicios.vision import camara as servicio_camara
 from backend.servicios.vision import geometria3d, tablero
 from backend.servicios.vision.camara import capturar_foto_tablero
@@ -54,7 +54,7 @@ def _resumen_lente(lente: geometria3d.Lente) -> dict:
 
 
 @router.get("/estado")
-def estado_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def estado_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Lente de la cámara (calibrado o supuesto), su posición respecto del tablero y cuántas fotos de calibración hay guardadas."""
     _camara(camara)
     alto, ancho = _foto(camara).shape[:2]
@@ -80,7 +80,7 @@ def estado_lente(camara: str = "principal", _facilitador_id: int = Depends(get_c
 
 
 @router.post("/foto")
-def agregar_foto(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def agregar_foto(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Saca una foto de la cámara y la guarda para calibrar el lente si se ven las 49 esquinas internas del tablero (7 × 7)."""
     _camara(camara)
     imagen = _foto(camara)
@@ -93,7 +93,7 @@ def agregar_foto(camara: str = "principal", _facilitador_id: int = Depends(get_c
 
 
 @router.post("/calcular")
-def calcular_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def calcular_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Calibra el lente con las fotos guardadas (distancia focal y distorsión). Si el resultado no es confiable deja el lente supuesto."""
     _camara(camara)
     carpeta = geometria3d.carpeta_fotos_lente(camara)
@@ -112,7 +112,7 @@ class FovRequest(BaseModel):
 
 
 @router.post("/fov")
-def fijar_campo_de_vision(cuerpo: FovRequest, camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def fijar_campo_de_vision(cuerpo: FovRequest, camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Fija a mano el campo de visión horizontal (grados) del lente: útil si ya lo sabés (un iPhone suele andar por 60-70°)."""
     _camara(camara)
     alto, ancho = _foto(camara).shape[:2]
@@ -123,7 +123,7 @@ def fijar_campo_de_vision(cuerpo: FovRequest, camara: str = "principal", _facili
 
 
 @router.delete("")
-def borrar_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_facilitador)) -> dict:
+def borrar_lente(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> dict:
     """Borra el lente calibrado y sus fotos: se vuelve al campo de visión típico."""
     _camara(camara)
     geometria3d.borrar_lente(camara)
@@ -131,7 +131,7 @@ def borrar_lente(camara: str = "principal", _facilitador_id: int = Depends(get_c
 
 
 @router.get("/vista")
-def vista_de_cajas(camara: str = "principal", casillas: str = "", _facilitador_id: int = Depends(get_current_facilitador)) -> Response:
+def vista_de_cajas(camara: str = "principal", casillas: str = "", _facilitador_id: int = Depends(get_current_principal)) -> Response:
     """La imagen actual con las cajas 3D (casilla × altura de la pieza) de algunas casillas, para comprobar que la geometría coincide."""
     _camara(camara)
     imagen = _foto(camara)

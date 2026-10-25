@@ -79,6 +79,10 @@ npm run build     # genera frontend/dist — el backend lo sirve automáticament
 Con el backend corriendo (`uvicorn backend.main:app`) y `frontend/dist` construido, todo el
 sistema queda disponible en un solo puerto: `http://127.0.0.1:8000`.
 
+Para desarrollo local conviene arrancarlo con `python scripts/iniciar_backend.py` (acepta `--host`, `--port` y
+`--reload`): con `uvicorn` a secas, `Ctrl+C` se queda esperando mientras haya un video de la cámara abierto en el
+navegador; el lanzador fija un tiempo máximo de cierre de 3 segundos.
+
 ## Tests
 
 ```bash
