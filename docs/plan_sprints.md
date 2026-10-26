@@ -931,8 +931,9 @@ alumnos de un curso compitan entre sí y lo hagan de forma justa y segura.
   (`tiempo_blancas_ms`, `tiempo_negras_ms`, `reloj_corre`) y los datos de cada jugador (nombre público, nivel, `ausente_s`).
 - **Regla de ausencia** (`presencia_sala.py`): con reloj no se puede dejar la partida. Consultar la sala o jugar es la señal de vida; **más de 20 segundos sin señal
   = pierde** (si se van los dos, se cierra sin ganador). El rival ve «Sin conexión hace 9 s · pierde en 11 s». La aplicación sigue avisando por el jugador si
-  este se mueve a otra pantalla (no es dejar la partida) y le recuerda volver. Sin reloj se puede salir y volver (limpieza a las 12 h). `motivo_fin` ahora distingue
-  `tiempo` y `ausencia`.
+  este se mueve a otra pantalla (no es dejar la partida) y le recuerda volver. Sin reloj se puede salir y volver un rato, pero si a quien le
+  toca mover no responde en 2 días (`limpieza_salas.HORAS_SALA_INACTIVA`) también pierde la partida (gana el otro). `motivo_fin` distingue
+  `tiempo` (con reloj, se acabó), `ausencia` (con reloj, se fue) y `sin_respuesta` (sin reloj, no respondió en 2 días).
 - **Amigos y compañeros** (`servicios/social/amigos.py`, tabla `amistad`, columna `usuario.codigo_amigo`): los compañeros de curso se pueden retar sin pedirse nada;
   quien no comparte curso se agrega con **correo o código de amigo** (se comparte por WhatsApp con un enlace `/#amigo=CÓDIGO`). **No hay búsqueda por nombre**
   (son menores) y la respuesta a una solicitud es siempre la misma exista o no la cuenta; hay límite de 10 solicitudes cada 10 minutos. Rechazar borra la fila.

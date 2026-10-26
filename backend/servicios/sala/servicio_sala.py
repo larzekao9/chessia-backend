@@ -10,7 +10,8 @@ reloj arranca cuando los dos ya movieron una vez (las dos primeras jugadas no ga
 si al que le toca se le acabó el tiempo y, si es así, cierra la partida: nadie depende de que una pantalla avise.
 
 **Ausencia.** En una sala con reloj no se puede dejar la partida: si un jugador sentado pasa más de `SEGUNDOS_AUSENCIA_CON_RELOJ` sin dar señal de
-vida (ver `presencia_sala.py`), pierde. Sin reloj se puede salir y volver; ahí manda la limpieza por inactividad (`limpieza_salas.py`).
+vida (ver `presencia_sala.py`), pierde. Sin reloj se puede salir y volver un rato (no hay apuro jugada a jugada), pero si a quien le toca mover
+no responde en `limpieza_salas.HORAS_SALA_INACTIVA` (2 días) también pierde la partida — esa limpieza por inactividad es quien lo cierra.
 """
 from __future__ import annotations
 

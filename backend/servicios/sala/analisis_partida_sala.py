@@ -20,15 +20,21 @@ CANTIDAD_MOMENTOS_CLAVE = 5
 
 
 def motivo_fin(partida: Partida) -> str | None:
-    """Por qué terminó la sala: `"mate"`, `"tablas"`, `"acuerdo"` (tablas aceptadas), `"abandono"`, `"tiempo"`, `"ausencia"`, `"inactividad"` o `None`.
+    """Por qué terminó la sala: `"mate"`, `"tablas"`, `"acuerdo"` (tablas aceptadas), `"abandono"`, `"tiempo"`, `"ausencia"`,
+    `"sin_respuesta"`, `"inactividad"` o `None`.
 
     - `"abandono"`: un jugador abandonó (estado `terminada` con `resultado_por_tiempo`; hay ganador).
     - `"tiempo"`: a un jugador se le acabó el reloj (estado `terminada`, el que perdió quedó con 0 ms).
     - `"ausencia"`: un jugador se fue de una sala con reloj y la perdió (estado `abandonada` con `resultado_por_tiempo`; hay ganador).
-    - `"inactividad"`: la sala venció por inactividad (estado `abandonada`; `resultado` es `None`).
+    - `"sin_respuesta"`: en una sala sin reloj, a quien le tocaba jugar no respondió en `limpieza_salas.HORAS_SALA_INACTIVA` (estado
+      `abandonada` con `resultado_por_tiempo`; hay ganador, perdió quien tenía el turno).
+    - `"inactividad"`: la sala (con jugadas de los dos, pero sin ninguna reciente) venció sin que nadie tuviera el turno claro — en la
+      práctica ya no ocurre desde que `"sin_respuesta"` siempre asigna un ganador; queda por compatibilidad con salas viejas.
     """
     if partida.estado == "abandonada":
-        return "ausencia" if partida.resultado_por_tiempo is not None else "inactividad"
+        if partida.resultado_por_tiempo is None:
+            return "inactividad"
+        return "ausencia" if partida.control_tiempo_ms else "sin_respuesta"
     if not partida.terminada and partida.estado != "terminada":
         return None
     if partida.resultado_por_tiempo == "1/2-1/2" and not partida.tablero.is_game_over():

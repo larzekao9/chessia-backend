@@ -298,24 +298,40 @@ def test_abandonar_sala_esperando_lanza_valueerror_y_no_la_modifica(repo):
     assert guardada.estado == "esperando" and guardada.resultado is None
 
 
-def test_sala_vencida_con_jugadas_queda_abandonada_con_motivo_inactividad(repo):
+def test_sala_sin_reloj_vencida_a_los_2_dias_pierde_quien_tenia_el_turno(repo):
     from datetime import datetime, timedelta, timezone
 
     from backend.servicios.sala.analisis_partida_sala import motivo_fin
 
     sala = crear_sala(1, "blancas")
     sala = unirse(sala.codigo_sala, 2)
+    # Tras estas 5 jugadas le toca mover a negras (usuario 2): si no responde, pierde.
     for i, jugada in enumerate(["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"]):
         mover_humano(sala.codigo_sala, 1 if i % 2 == 0 else 2, jugada)
     sala = repo.obtener(sala.id)
-    sala.actualizada_en = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+    sala.actualizada_en = (datetime.now(timezone.utc) - timedelta(hours=49)).isoformat()
     repo.guardar(sala)
 
     limpiar_salas_inactivas(repo)
     vencida = repo.obtener(sala.id)
     assert vencida.estado == "abandonada"
-    assert vencida.resultado is None
-    assert motivo_fin(vencida) == "inactividad"
+    assert vencida.resultado == "1-0"  # ganan blancas: negras no respondió
+    assert motivo_fin(vencida) == "sin_respuesta"
+
+
+def test_sala_sin_reloj_con_menos_de_13_horas_sigue_en_curso(repo):
+    """Todavía no pasaron los 2 días: no hay que esperar hasta el último minuto para confirmar que no se cierra antes de tiempo."""
+    from datetime import datetime, timedelta, timezone
+
+    sala = crear_sala(1, "blancas")
+    sala = unirse(sala.codigo_sala, 2)
+    mover_humano(sala.codigo_sala, 1, "e2e4")
+    sala = repo.obtener(sala.id)
+    sala.actualizada_en = (datetime.now(timezone.utc) - timedelta(hours=13)).isoformat()
+    repo.guardar(sala)
+
+    limpiar_salas_inactivas(repo)
+    assert repo.obtener(sala.id).estado == "en_curso"
 
 
 def test_motivo_fin_distingue_mate_tablas_y_abandono(repo):

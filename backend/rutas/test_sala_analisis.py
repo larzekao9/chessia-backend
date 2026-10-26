@@ -163,15 +163,23 @@ class TestLimpiezaAlLeer:
         self._envejecer(cliente, codigo, minutes=45)
         assert cliente.get(f"/sala/{codigo}", headers=auth_header(token)).status_code == 404
 
-    def test_get_sala_inactiva_con_jugadas_queda_cancelada_por_inactividad(self, cliente):
+    def test_get_sala_sin_reloj_vencida_a_los_2_dias_pierde_quien_tenia_el_turno(self, cliente):
         codigo, token1, token2 = _crear_sala_en_curso(cliente)
+        # Tras estas jugadas le toca mover a negras: si no responde en 2 días, pierde.
         _jugar(cliente, codigo, token1, token2, ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"])
-        self._envejecer(cliente, codigo, hours=13)
+        self._envejecer(cliente, codigo, hours=49)
         data = cliente.get(f"/sala/{codigo}", headers=auth_header(token1)).json()
         assert data["estado"] == "abandonada"
         assert data["terminada"] is True
-        assert data["resultado"] is None
-        assert data["motivo_fin"] == "inactividad"
+        assert data["resultado"] == "1-0"
+        assert data["motivo_fin"] == "sin_respuesta"
+
+    def test_get_sala_sin_reloj_con_menos_de_2_dias_sigue_en_curso(self, cliente):
+        codigo, token1, token2 = _crear_sala_en_curso(cliente)
+        _jugar(cliente, codigo, token1, token2, ["e2e4"])
+        self._envejecer(cliente, codigo, hours=13)
+        data = cliente.get(f"/sala/{codigo}", headers=auth_header(token1)).json()
+        assert data["estado"] == "en_curso"
 
     def test_abandono_manual_sigue_siendo_abandono(self, cliente):
         codigo, token1, token2 = _crear_sala_en_curso(cliente)

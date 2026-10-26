@@ -6,11 +6,15 @@ en vivo, en solo lectura, como espectador. Los docentes ven el nombre completo d
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from backend.modelos.tablas_orm import UsuarioORM
 from backend.servicios.institucion.servicio_instituciones import ids_alumnos_visibles
-from backend.servicios.sala import servicio_sala
+from backend.servicios.sala import limpiar_salas_inactivas, servicio_sala
+
+logger = logging.getLogger(__name__)
 
 
 def _jugador(db: Session, usuario_id: int | None) -> dict | None:
@@ -21,7 +25,14 @@ def _jugador(db: Session, usuario_id: int | None) -> dict | None:
 
 
 def partidas_en_vivo(db: Session, facilitador: UsuarioORM) -> list[dict]:
-    """Las salas abiertas (esperando rival o en curso) en las que juega algún alumno que `facilitador` puede ver, las que tienen reloj primero."""
+    """Las salas abiertas (esperando rival o en curso) en las que juega algún alumno que `facilitador` puede ver, las que tienen reloj primero.
+
+    Antes de listar, barre las salas vencidas (se le acabó el reloj a alguien, o se fue hace más de 20 s): si nadie más consultó esa sala
+    todavía (`GET /sala/activa` o `GET /sala/{codigo}`), sin este barrido acá el docente seguía viendo "en curso" una partida que ya terminó."""
+    try:
+        limpiar_salas_inactivas()
+    except Exception:
+        logger.exception("Falló la limpieza de salas inactivas antes de listar las partidas en vivo")
     visibles = ids_alumnos_visibles(db, facilitador)
     filas = []
     for partida in servicio_sala._repositorio.listar_salas_abiertas():
