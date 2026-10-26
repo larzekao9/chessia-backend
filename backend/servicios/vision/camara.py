@@ -199,6 +199,38 @@ def capturar_foto_tablero(fuente: int | str | None = None, camara: str = "princi
         return _captura_continua(fuente_resuelta, camara).ultimo_frame()
 
 
+SEGUNDOS_CAMARA_COLGADA = 2.0
+"""Sin cuadros nuevos durante este tiempo, la cámara se da por colgada y se reabre."""
+
+
+def esperar_foto_nueva(despues_de: int = 0, camara: str = "principal", timeout: float = 0.25) -> tuple[int, np.ndarray] | None:
+    """Espera (hasta `timeout` s) un cuadro de la cámara POSTERIOR al número `despues_de` y lo devuelve con su número; `None` si no llegó ninguno.
+
+    Pedir el último cuadro con `capturar_foto_tablero` más rápido de lo que la cámara los entrega repite el mismo cuadro; el seguimiento por diferencias lo
+    cuenta como «el tablero sigue quieto» y daría una jugada por buena con un solo cuadro real. Con el número de cuadro cada uno se mira una vez, y apenas llega.
+
+    Raises:
+        RuntimeError: la cámara no está configurada o no se pudo abrir.
+    """
+    validar_camara(camara)
+    fuente = _fuente_por_defecto(camara)
+    if fuente is None:
+        raise RuntimeError(f"La cámara {camara} no está configurada")
+    with _CERROJO_CAMARA:
+        captura = _captura_continua(fuente, camara)
+    if despues_de == 0:
+        captura.ultimo_frame()  # el primer pedido espera a que la cámara esté lista (autoexposición)
+    foto = captura.esperar_frame(despues_de, timeout)
+    if foto is None and time.monotonic() - captura.ultimo_cuadro_en > SEGUNDOS_CAMARA_COLGADA:
+        # La cámara dejó de entregar imágenes (la webcam USB se «cuelga» de vez en cuando): se suelta y se vuelve a abrir en el próximo pedido.
+        with _CERROJO_CAMARA:
+            if _capturas.get(camara) is captura:
+                _capturas.pop(camara, None)
+        captura.detener()
+        raise RuntimeError(f"La cámara {camara} dejó de entregar imágenes: se está reiniciando")
+    return foto
+
+
 SEGUNDOS_INACTIVA = 15.0
 """Sin pedidos de fotos durante este tiempo, la cámara se suelta (otra app puede usarla) y se reabre al siguiente pedido."""
 
@@ -255,6 +287,7 @@ class _CapturaContinua:
         self._condicion = threading.Condition()
         self._numero = 0
         self._camara = _abrir_con_limite(fuente)
+        self.ultimo_cuadro_en = time.monotonic()
         if not self._camara.isOpened():
             self._camara.release()
             raise RuntimeError(f"No se pudo abrir la cámara/fuente {fuente!r}")
@@ -289,6 +322,7 @@ class _CapturaContinua:
                 fallos = 0
                 leidos += 1
                 imagen = _rotar(imagen, self.camara_id)
+                self.ultimo_cuadro_en = time.monotonic()
                 with self._condicion:
                     self._frame = imagen
                     self._numero += 1

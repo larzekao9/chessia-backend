@@ -72,3 +72,38 @@ def test_vista_deshacer_y_foto_base_sin_seguimiento(cliente) -> None:
     assert cliente.get("/vision/seguimiento/vista").status_code == 409
     assert cliente.post("/vision/seguimiento/deshacer").status_code == 409
     assert cliente.post("/vision/seguimiento/foto-base").status_code == 409
+
+
+def test_una_alerta_guarda_las_fotos_y_los_cambios_para_revisarlos(cliente, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(seguimiento_vivo, "GUARDAR_FALLOS", True)
+    monkeypatch.setattr(seguimiento_vivo, "DIRECTORIO_FALLOS", tmp_path / "fallos")
+    inicio = chess.STARTING_FEN
+    ilegal = chess.Board(inicio); ilegal.set_piece_at(chess.E2, None); ilegal.set_piece_at(chess.E5, chess.Piece(chess.PAWN, chess.WHITE))
+    cliente.post("/vision/seguimiento/iniciar", json={})
+    cliente.cuadros += [_frame(inicio, semilla=s) for s in (1, 2, 3)] + [_frame(ilegal.fen(), mano=True, semilla=4)] + [_frame(ilegal.fen(), semilla=s) for s in range(5, 12)]
+    estados = [cliente.post("/vision/seguimiento/tick").json()["estado"] for _ in range(11)]
+    assert "invalida" in estados
+    archivos = sorted((tmp_path / "fallos").glob("*"))
+    assert [a.suffix for a in archivos] == [".jpg", ".json"]  # una sola vez por alerta, aunque dure varios cuadros
+    import json
+
+    datos = json.loads(archivos[1].read_text(encoding="utf-8"))
+    assert datos["estado"] == "invalida" and {"e2", "e5"} <= set(datos["cambiadas"]) and datos["puntajes"]["e5"] > 0
+
+
+def test_avanzar_con_cuadros_nuevos_no_repite_ni_reprocesa_un_cuadro(monkeypatch, cliente) -> None:
+    inicio = chess.STARTING_FEN
+    llegadas = [(1, _frame(inicio, semilla=1)), None, (2, _frame(inicio, semilla=2)), None]
+    pedidos: list[int] = []
+
+    def nueva(despues_de, camara="principal", timeout=0.25):
+        pedidos.append(despues_de)
+        return llegadas.pop(0)
+
+    monkeypatch.setattr(seguimiento_vivo, "esperar_foto_nueva", nueva)
+    cliente.post("/vision/seguimiento/iniciar", json={})
+    primero = seguimiento_vivo.avanzar(nuevo=True)
+    sin_cuadro = seguimiento_vivo.avanzar(nuevo=True)
+    segundo = seguimiento_vivo.avanzar(nuevo=True)
+    assert "repetido" not in primero and sin_cuadro["repetido"] is True and sin_cuadro["estado"] == primero["estado"] and "repetido" not in segundo
+    assert pedidos == [0, 1, 1]  # cada pedido es «después del último cuadro ya procesado»

@@ -333,3 +333,108 @@ def test_ejecutor_real_desconectar_cierra_pinza_y_cliente():
     ejecutor.desconectar()
 
     assert historial == [("pinza_desconectar",), ("cerrar",)]
+
+
+def test_ejecutor_real_al_soltar_no_baja_del_todo_si_hay_elevacion_al_soltar():
+    """Al agarrar baja hasta la altura de agarre; al soltar se queda `elevacion_al_soltar_mm` más arriba (y abre más la pinza), para no chocar con el tablero."""
+    parametros = ParametrosAgarre(z_tope=100.0, margen_agarre_mm=3.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, apertura_extra_soltar=400, elevacion_al_soltar_mm=4.0)
+    ejecutor, historial = _ejecutor(parametros)
+
+    _jugar(ejecutor)
+
+    bajadas = [l[1][2] for l in historial if l[0] == "MovL" and l[1][2] < 150]
+    assert bajadas == [103.0, 107.0]  # agarra a 3 mm del tablero y suelta 4 mm más arriba
+    assert [l[1] for l in historial if l[0] == "pinza_abrir_a"] == [APERTURA, min(1000, APERTURA + 400)]  # y suelta con la pinza más abierta
+
+
+def test_ejecutor_real_no_mueve_nada_si_el_recorrido_pasa_por_una_zona_prohibida():
+    """El trípode de la cámara (una zona prohibida) sobre el destino: se rechaza ANTES de mover la primera pieza."""
+    tripode = {"nombre": "Trípode", "forma": "circulo", "x": 400.0, "y": 300.0, "radio": 20.0}  # sobre e4
+    parametros = ParametrosAgarre(z_tope=100.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, zonas_prohibidas=[tripode])
+    ejecutor, historial = _ejecutor(parametros)
+
+    with pytest.raises(RuntimeError, match="lugar prohibido.*Trípode"):
+        _jugar(ejecutor, "e2e4")
+
+    assert historial == []
+
+
+def test_ejecutor_real_no_mueve_nada_si_el_destino_sale_de_los_limites_de_la_mesa():
+    parametros = ParametrosAgarre(z_tope=100.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, limites_mesa=[-50.0, -50.0, 750.0, 250.0])  # la fila 4 (y=300) queda fuera
+    ejecutor, historial = _ejecutor(parametros)
+
+    with pytest.raises(RuntimeError, match="límites de la mesa"):
+        _jugar(ejecutor, "e2e4")
+
+    assert historial == []
+
+
+def test_ejecutor_real_con_zonas_lejanas_se_mueve_normal():
+    lejos = {"nombre": "Lejos", "forma": "circulo", "x": 5000.0, "y": 5000.0, "radio": 100.0}
+    parametros = ParametrosAgarre(z_tope=100.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, zonas_prohibidas=[lejos], limites_mesa=[-1000.0, -1000.0, 2000.0, 2000.0])
+    ejecutor, historial = _ejecutor(parametros)
+
+    _jugar(ejecutor, "e2e4")
+
+    assert any(l[0] == "pinza_cerrar" for l in historial)
+
+
+def test_ejecutor_real_baja_y_sube_despacio_cerca_del_tablero_y_rapido_arriba():
+    """Los tramos verticales cerca del tablero (bajar a agarrar o soltar, y subir de ahí) van a la velocidad lenta; los traslados por arriba, a la general."""
+    parametros = ParametrosAgarre(z_tope=100.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, velocidad_bajada=8, aceleracion_bajada=4)
+    ejecutor, historial = _ejecutor(parametros)
+    registro = []
+    original = ejecutor.cliente.mover_a_pose
+
+    def mover_a_pose(pose, lineal=False, aceleracion=None, velocidad=None, **_):
+        registro.append((round(pose[2]), velocidad, aceleracion))
+        return original(pose, lineal=lineal)
+
+    ejecutor.cliente.mover_a_pose = mover_a_pose
+    ejecutor.cliente.velocidad, ejecutor.cliente.aceleracion = 40, 15  # las generales del brazo, más altas que las de bajada
+
+    _jugar(ejecutor)
+
+    por_altura = {z: (v, a) for z, v, a in registro}
+    assert por_altura[103] == (8, 4)  # abajo (agarre y soltado): lento
+    assert [v for z, v, a in registro if z == 183][0] is None  # el traslado por arriba, a la velocidad general del brazo
+    lentas = [z for z, v, a in registro if v == 8]
+    assert lentas.count(103) == 2 and lentas.count(183) >= 2  # baja a agarrar y a soltar, y las dos primeras subidas son lentas
+
+
+def test_ejecutor_real_traslada_por_encima_de_la_pieza_mas_alta_con_holgura():
+    """Con las alturas de las piezas medidas (el rey, 74 mm) el traslado sube lo necesario para pasar con 15 mm de aire aunque `altura_segura_mm` sea menor."""
+    alturas = {"p": 42.0, "n": 55.0, "r": 44.0, "b": 58.0, "q": 63.0, "k": 74.0}
+    parametros = ParametrosAgarre(z_tope=100.0, margen_agarre_mm=3.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, alturas_piezas_mm=alturas, holgura_traslado_mm=15.0)
+    assert parametros.altura_de_traslado_para("p") == 86.0  # 74 + 15 − 3 (el margen de agarre)
+    ejecutor, historial = _ejecutor(parametros)
+
+    _jugar(ejecutor)
+
+    altos = {l[1][2] for l in historial if l[0] in ("MovJ", "MovL")}
+    assert 189.0 in altos and 183.0 not in altos  # sube a 103 + 86, no a 103 + 80
+
+
+def test_ejecutor_real_en_las_casillas_del_borde_no_baja_mas_que_el_marco_del_tablero():
+    """El marco sobresale 7 mm de la superficie: en a1 los dedos no bajan por debajo del marco (más 2 mm); en e4, que está lejos, bajan a su altura de agarre normal."""
+    parametros = ParametrosAgarre(z_tope=100.0, margen_agarre_mm=3.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, altura_borde_mm=7.0, cementerio_origen=[900.0, 0.0])
+    ejecutor, _ = _ejecutor(parametros)
+
+    assert ejecutor._pose("a1")[2] == 109.0  # 100 + 7 + 2, no 103
+    assert ejecutor._pose("h8")[2] == 109.0 and ejecutor._pose("a5")[2] == 109.0
+    assert ejecutor._pose("e4")[2] == 103.0
+    assert ejecutor._pose("cementerio:0")[2] == 103.0  # el cementerio no es del tablero
+
+
+def test_ejecutor_real_aplica_el_corrimiento_medido_a_las_casillas_del_tablero_y_no_al_cementerio():
+    """El corrimiento (lo que hay que correr la pinza para que baje centrada) se suma a todas las casillas del tablero; el cementerio y las reservas ya se calibran donde se quieren."""
+    parametros = ParametrosAgarre(z_tope=100.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, corrimiento_x_mm=3.0, corrimiento_y_mm=-2.0, cementerio_origen=[900.0, 0.0])
+    ejecutor, historial = _ejecutor(parametros)
+    nominal = ejecutor.posiciones_casillas["e2"]
+
+    assert ejecutor._xy("e2") == (nominal[0] + 3.0, nominal[1] - 2.0)
+    assert ejecutor._xy("cementerio:0") == (900.0, 0.0)
+
+    _jugar(ejecutor)
+    destinos = [(l[1][0], l[1][1]) for l in historial if l[0] in ("MovJ", "MovL")]
+    assert destinos[0] == pytest.approx((nominal[0] + 3.0, nominal[1] - 2.0))  # va sobre e2 con el corrimiento

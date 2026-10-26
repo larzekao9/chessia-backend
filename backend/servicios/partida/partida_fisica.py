@@ -41,9 +41,14 @@ ESPERANDO_ROBOT_MANUAL = "esperando_robot_manual"
 INCIDENTE = "incidente"
 FIN = "fin"
 DETENIDA = "detenida"
-INTERVALO_S = 1.0
+INTERVALO_S = 1 / 30
+"""Un cuadro de la cámara (30 por segundo): el seguimiento espera cada cuadro nuevo y lo procesa apenas llega (unos 10 ms), así una jugada se reconoce ~0,15 s después de soltar la pieza."""
 FALLOS_DE_CAMARA_MAXIMOS = 5
+"""Segundos seguidos sin poder leer la cámara antes de dar un incidente."""
+PAUSA_TRAS_FALLO_S = 0.2
+"""Pausa tras un fallo de la cámara (mientras se reinicia): sin ella el bucle, que no espera entre cuadros, giraría sin parar."""
 CUADROS_PARA_BASE = 12
+"""Segundos que se espera a que el tablero quede quieto para tomar la foto base tras la jugada del brazo."""
 """Cuadros que se espera a que el tablero quede quieto para tomar la foto base tras la jugada del brazo."""
 DIFERENCIAS_TOLERADAS = 1
 """Casillas ocupadas distintas entre la cámara y la posición que se avisan pero no frenan la partida; con más, incidente."""
@@ -72,6 +77,10 @@ class PartidaFisica:
         self.ejecutadas: set[int] = set()
         """Números de jugada (ply) que el brazo ya hizo: una jugada no se manda dos veces."""
         self._fallos_camara = 0
+        self.por_cuadros = intervalo > 0
+        """Con un intervalo real, el seguimiento va al ritmo de los cuadros de la cámara; con 0 (pruebas), una foto por paso."""
+        self.fallos_maximos = round(FALLOS_DE_CAMARA_MAXIMOS / PAUSA_TRAS_FALLO_S) if intervalo > 0 else FALLOS_DE_CAMARA_MAXIMOS
+        self.cuadros_para_base = max(CUADROS_PARA_BASE, round(CUADROS_PARA_BASE / intervalo)) if intervalo > 0 else CUADROS_PARA_BASE
         self._cerrojo = threading.RLock()
         self._trabajo = threading.Lock()
         self._parar = threading.Event()
@@ -113,7 +122,7 @@ class PartidaFisica:
             if self.estado not in (ESPERANDO_HUMANO, ESPERANDO_ROBOT_MANUAL):
                 return
             try:
-                resultado = seguimiento_vivo.avanzar()
+                resultado = seguimiento_vivo.avanzar(nuevo=self.por_cuadros)
                 self._fallos_camara = 0
             except seguimiento_vivo.SinSeguimiento:
                 self._hacer_incidente("El seguimiento de la cámara se detuvo.")
@@ -121,8 +130,14 @@ class PartidaFisica:
             except RuntimeError as error:
                 self._fallos_camara += 1
                 self._registrar(f"Cámara: {error}")
-                if self._fallos_camara >= FALLOS_DE_CAMARA_MAXIMOS:
+                if self._fallos_camara >= 3:
+                    self.mensaje = "La cámara no entrega imágenes: se está reiniciando…"
+                if self.por_cuadros:
+                    self._parar.wait(PAUSA_TRAS_FALLO_S)
+                if self._fallos_camara >= self.fallos_maximos:
                     self._hacer_incidente(f"La cámara no responde ({error}).")
+                return
+            if resultado.get("repetido"):  # la cámara no entregó un cuadro nuevo todavía: no hay nada que procesar
                 return
             self.ultimo_seguimiento = {k: resultado.get(k) for k in ("estado", "mensaje", "cambiadas")}
             if resultado["estado"] != "jugada":
@@ -203,7 +218,7 @@ class PartidaFisica:
         try:
             seguimiento_vivo.fijar_posicion(fen)
             quieto = False
-            for _ in range(CUADROS_PARA_BASE):
+            for _ in range(self.cuadros_para_base):
                 if seguimiento_vivo.avanzar()["estado"] == "esperando":
                     quieto = True
                     break
@@ -277,7 +292,7 @@ class PartidaFisica:
             try:
                 seguimiento_vivo.fijar_posicion(self._partida().fen)
             except seguimiento_vivo.SinSeguimiento:
-                seguimiento_vivo.iniciar(self._partida().fen, self.camara)
+                seguimiento_vivo.iniciar(self._partida().fen, self.camara, self.intervalo or 1.0)
             if not self._terminar_si_corresponde():
                 self._fijar(ESPERANDO_HUMANO, "Tablero confirmado. Tu turno.")
         finally:
@@ -313,7 +328,7 @@ class PartidaFisica:
             except Exception:  # noqa: BLE001 - el hilo no puede morir en silencio
                 logger.exception("Error inesperado en la partida física %s", self.partida_id)
                 self._hacer_incidente("Error inesperado del sistema (ver el registro del backend).")
-            self._parar.wait(self.intervalo)
+            self._parar.wait(0 if self.por_cuadros else self.intervalo)  # con cuadros nuevos, el propio avanzar() espera al siguiente
 
     def detener(self) -> None:
         self._parar.set()
@@ -358,7 +373,7 @@ def iniciar(partida_id: str, camara: str = "principal", intervalo: float = INTER
     with _cerrojo:
         if _actual is not None:
             _actual.detener()
-        seguimiento_vivo.iniciar(partida.fen, camara)
+        seguimiento_vivo.iniciar(partida.fen, camara, intervalo or 1.0)  # intervalo 0 = sin pausas (pruebas): se cuenta como el ritmo de siempre
         nueva = PartidaFisica(partida_id, camara, intervalo)
         nueva._registrar(f"Iniciada con oponente '{partida.tipo_oponente}'" + (" y brazo" if partida.usa_brazo else " (sin brazo: movés vos las piezas del robot)"))
         _actual = nueva

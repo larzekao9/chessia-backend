@@ -70,6 +70,7 @@ def _obtener_ejecutor() -> EjecutorMovimiento:
         if puerto_dashboard is not None:
             kwargs["puerto_dashboard"] = int(puerto_dashboard)
         kwargs.update(_calibracion_del_brazo())
+        kwargs["velocidad_global"] = kwargs["parametros"].velocidad_global
     if modo == "real":
         kwargs["reintentos_agarre"] = 1  # regla de negocio: un solo reintento de agarre, después incidente
     ejecutor = crear_ejecutor_movimiento(modo, **kwargs)

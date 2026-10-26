@@ -59,6 +59,13 @@ class EjecutarRutinaRequest(BaseModel):
     confirmar: bool = False
 
 
+class CalibrarTableroRequest(BaseModel):
+    puntos: dict[str, list[float]]
+    """Las poses `(x, y, z, rx, ry, rz)` de `a1`, `h1` y `a8` (y `h8`, opcional), tomadas con la punta de la pinza en el centro de cada casilla."""
+    angulos_cero: list[float] = Field(min_length=6, max_length=6)
+    """Los 6 ángulos de la posición cero (dónde espera el brazo, fuera del encuadre de la cámara)."""
+
+
 class ProbarAperturaRequest(BaseModel):
     casilla: str = Field(max_length=2)
     tipo_pieza: str = Field("p", max_length=1)
@@ -122,6 +129,18 @@ def diagnostico() -> list[dict]:
     return _llamar(control_brazo.diagnostico)
 
 
+@router.get("/calibracion/tablero")
+def tablero_calibrado() -> dict | None:
+    """La calibración del tablero que usa el brazo: tamaño de las casillas, esquinas y la sugerencia de cementerio y reservas (`null` si no hay)."""
+    return _llamar(control_brazo.tablero_calibrado)
+
+
+@router.post("/calibracion/tablero")
+def calibrar_tablero(cuerpo: CalibrarTableroRequest) -> dict:
+    """Guarda y aplica la calibración del tablero con las poses tomadas del brazo real. 409 si es el emulador o hay un movimiento en curso, 422 si los datos no sirven."""
+    return _llamar(control_brazo.calibrar_tablero, cuerpo.puntos, cuerpo.angulos_cero)
+
+
 @router.get("/parametros")
 def parametros() -> dict:
     return _llamar(control_brazo.parametros)
@@ -180,6 +199,24 @@ def mover_articulaciones(cuerpo: ArticulacionesRequest) -> dict:
 @router.post("/mover-relativo")
 def mover_relativo(cuerpo: RelativoRequest) -> dict:
     return _llamar(control_brazo.mover_relativo, cuerpo.dx, cuerpo.dy, cuerpo.dz, cuerpo.velocidad_mm_s)
+
+
+@router.post("/centrar/bajar")
+def centrar_bajar(cuerpo: ProbarAperturaRequest) -> dict:
+    """Baja despacio sobre la pieza de `casilla`, con la pinza abierta, y se queda ahí para centrarla (con «mover-relativo») y guardar el corrimiento."""
+    return _llamar(control_brazo.centrar_bajar, cuerpo.casilla, cuerpo.tipo_pieza)
+
+
+@router.post("/centrar/guardar")
+def centrar_guardar() -> dict:
+    """Guarda cuánto se corrió la pinza respecto de la casilla calibrada; desde ahí todo el tablero lleva ese corrimiento."""
+    return _llamar(control_brazo.centrar_guardar)
+
+
+@router.post("/centrar/subir")
+def centrar_subir() -> dict:
+    """Sube de la pieza y vuelve a la posición de descanso."""
+    return _llamar(control_brazo.centrar_subir)
 
 
 @router.post("/probar-apertura")

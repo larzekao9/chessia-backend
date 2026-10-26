@@ -218,7 +218,7 @@ def test_la_partida_fisica_pide_cinco_fallos_de_camara_seguidos_para_dar_inciden
         raise RuntimeError("cámara desconectada")
 
     monkeypatch.setattr(seguimiento_vivo, "capturar_foto_tablero", sin_camara)
-    for _ in range(pf.FALLOS_DE_CAMARA_MAXIMOS - 1):
+    for _ in range(sesion.fallos_maximos - 1):
         sesion.paso()
     assert sesion.estado == pf.ESPERANDO_HUMANO
     sesion.paso()

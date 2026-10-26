@@ -10,6 +10,7 @@ import chess
 
 from backend.servicios.brazo.calibracion_brazo import ParametrosAgarre
 from backend.servicios.brazo.cliente_dobot import ClienteDobot
+from backend.servicios.brazo import geometria_brazo, zonas
 from backend.servicios.brazo.planificador_movimiento import PREFIJO_CEMENTERIO, PREFIJO_RESERVA, Paso, planificar
 from backend.servicios.brazo.pinza_dh import AGARRE_SOSTIENE, POSICION_ABIERTA, PinzaDH
 
@@ -87,6 +88,11 @@ class EjecutorSimulado(EjecutorMovimiento):
         from backend.servicios.simulacion.escena import cerrar_escena
 
         cerrar_escena(self.client_id)
+
+
+def _es_casilla_del_borde(lugar: str) -> bool:
+    """Si `lugar` es una casilla de la primera o la última fila o columna del tablero (no el cementerio ni la reserva)."""
+    return len(lugar) == 2 and (lugar[0] in "ah" or lugar[1] in "18")
 
 
 class PiezaNoAgarrada(RuntimeError):
@@ -183,14 +189,27 @@ class EjecutorReal(EjecutorMovimiento):
             x, y = self.parametros.reservas[nombre]
             return x, y
         x, y, _ = self.posiciones_casillas[lugar]
-        return x, y
+        return x + self.parametros.corrimiento_x_mm, y + self.parametros.corrimiento_y_mm  # lo medido al centrar la pinza sobre una pieza
 
     def _pose(self, casilla: str, sobre_mm: float = 0.0, tipo_pieza: str = "p") -> tuple[float, ...]:
         """Pose de la herramienta sobre `casilla` (o cementerio/reserva): altura de agarre de `tipo_pieza` (su margen propio si lo
         tiene, ver `ParametrosAgarre.margen_para`) más `sobre_mm`, con el giro en diagonal."""
         x, y = self._xy(casilla)
         rx, ry, rz = self.orientacion
-        return (x, y, self.parametros.z_agarre_para(tipo_pieza) + sobre_mm, rx, ry, rz + self.parametros.giro_diagonal_grados)
+        p = self.parametros
+        z = p.z_agarre_para(tipo_pieza) + sobre_mm
+        if p.altura_borde_mm and _es_casilla_del_borde(casilla):  # junto al marco del tablero los dedos no pueden bajar más que el marco (más 2 mm de aire)
+            z = max(z, p.z_tope + p.altura_borde_mm + 2.0)
+        return (x, y, z, rx, ry, rz + p.giro_diagonal_grados)
+
+    def _seguro(self, tipo_pieza: str = "p") -> float:
+        """Cuánto sobre la altura de agarre se sube para trasladar una pieza de `tipo_pieza` (ver `ParametrosAgarre.altura_de_traslado_para`)."""
+        return self.parametros.altura_de_traslado_para(tipo_pieza)
+
+    def _lento(self) -> dict:
+        """Velocidad y aceleración de los tramos verticales cerca del tablero: nunca más rápidas que las generales del brazo."""
+        p = self.parametros
+        return {"velocidad": min(p.velocidad_bajada, getattr(self.cliente, "velocidad", p.velocidad_bajada)), "aceleracion": min(p.aceleracion_bajada, getattr(self.cliente, "aceleracion", p.aceleracion_bajada))}
 
     def bajar_a(self, casilla: str, tipo_pieza: str = "p") -> None:
         """Baja con la pinza abierta (a la apertura de aproximación de `tipo_pieza`) hasta la altura de agarre sobre `casilla`, sin cerrarla.
@@ -198,8 +217,8 @@ class EjecutorReal(EjecutorMovimiento):
         Sirve para ver si los dedos quedan bien centrados alrededor de la pieza antes de probar un agarre. Se sube con `subir_de`.
         """
         self.pinza.mover_a(self.parametros.apertura_para(tipo_pieza))
-        self.cliente.mover_a_pose(self._pose(casilla, self.parametros.altura_segura_mm, tipo_pieza))
-        self.cliente.mover_a_pose(self._pose(casilla, tipo_pieza=tipo_pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(casilla, self._seguro(tipo_pieza), tipo_pieza))
+        self.cliente.mover_a_pose(self._pose(casilla, tipo_pieza=tipo_pieza), lineal=True, **self._lento())
 
     def subir_de(self, casilla: str, tipo_pieza: str = "p") -> None:
         """Sube a altura segura sobre `casilla` con la pinza abierta (el paso inverso de `bajar_a`)."""
@@ -208,7 +227,7 @@ class EjecutorReal(EjecutorMovimiento):
     def _retirarse(self, casilla: str, apertura: int, tipo_pieza: str = "p") -> None:
         """Deja la pinza abierta a `apertura` y sube a altura segura, para no arrastrar piezas si algo salió mal."""
         self.pinza.mover_a(apertura)
-        self.cliente.mover_a_pose(self._pose(casilla, self.parametros.altura_segura_mm, tipo_pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(casilla, self._seguro(tipo_pieza), tipo_pieza), lineal=True, **self._lento())
 
     def ejecutar_movimiento(self, tablero_antes: chess.Board, jugada: chess.Move) -> None:
         """Hace `jugada` con el brazo (cada paso de `planificar`) y lo deja en la posición cero.
@@ -241,12 +260,43 @@ class EjecutorReal(EjecutorMovimiento):
             self.parametros.apertura_para(paso.pieza)
             self._xy(paso.origen)
             self._xy(paso.destino)
+        self._comprobar_zonas(pasos)
         if not self.pinza.estado().inicializada:
             raise RuntimeError("La pinza no está inicializada: llamá a conectar() o a pinza.inicializar() antes de mover piezas.")
         for paso in pasos:
             self._trasladar(paso)
         if self.angulos_cero is not None:
             self.cliente.mover_a_angulos(self.angulos_cero)
+
+    def _comprobar_zonas(self, pasos: list[Paso]) -> None:
+        """Antes de mover nada: la punta, en cada tramo de cada paso (y de ida y vuelta a la posición cero), no entra a una zona prohibida ni sale de los límites de la mesa,
+        y la posición cero tampoco deja el brazo en una zona prohibida. Si algo no cumple, no se mueve.
+
+        Raises:
+            RuntimeError: con el lugar prohibido por el que pasaría.
+        """
+        p = self.parametros
+        if not p.zonas_prohibidas and not p.limites_mesa:
+            return
+        largo = (p.largo_pinza_mm or geometria_brazo.LARGO_PINZA_DEFECTO * 1000.0) / 1000.0
+        problemas: list[str] = []
+        previo = zonas.punta_en_mm(self.angulos_cero, largo) if self.angulos_cero is not None else None
+        if self.angulos_cero is not None:
+            problemas += [f"la posición de descanso: {t}" for t in zonas.problemas_de_brazo(self.angulos_cero, p, largo)]
+        elevacion = p.elevacion_al_soltar_mm
+        for paso in pasos:
+            o, d, pz = paso.origen, paso.destino, paso.pieza
+            seguro = self._seguro(pz)
+            camino = [self._pose(o, seguro, pz)[:3], self._pose(o, 0.0, pz)[:3], self._pose(o, seguro, pz)[:3], self._pose(d, seguro, pz)[:3], self._pose(d, elevacion, pz)[:3], self._pose(d, seguro, pz)[:3]]
+            if previo is not None:
+                camino.insert(0, previo)
+            for a, b in zip(camino, camino[1:]):
+                problemas += [t for t in zonas.problemas_de_tramo(a, b, p) if t not in problemas]
+            previo = camino[-1]
+        if previo is not None and self.angulos_cero is not None:
+            problemas += [t for t in zonas.problemas_de_tramo(previo, zonas.punta_en_mm(self.angulos_cero, largo), p) if t not in problemas]
+        if problemas:
+            raise RuntimeError("No se mueve nada: el recorrido pasa por un lugar prohibido. " + "; ".join(problemas[:3]))
 
     def _trasladar(self, paso: Paso) -> None:
         """Un paso, con los reintentos de agarre que se hayan pedido (solo si la pinza cerró en el aire)."""
@@ -261,11 +311,11 @@ class EjecutorReal(EjecutorMovimiento):
     def _trasladar_una_vez(self, paso: Paso) -> None:
         origen, destino = paso.origen, paso.destino
         pieza = paso.pieza
-        seguro = self.parametros.altura_segura_mm
+        seguro = self._seguro(pieza)
         apertura = self.parametros.apertura_para(pieza)
         self.pinza.mover_a(apertura)
         self.cliente.mover_a_pose(self._pose(origen, seguro, pieza))
-        self.cliente.mover_a_pose(self._pose(origen, tipo_pieza=pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(origen, tipo_pieza=pieza), lineal=True, **self._lento())  # baja despacio: sin golpear el tablero
         cierre = self.pinza.cerrar()
         if cierre.agarre != AGARRE_SOSTIENE:
             self._retirarse(origen, apertura, pieza)
@@ -273,11 +323,11 @@ class EjecutorReal(EjecutorMovimiento):
                 f"La pinza cerró en {origen} y no sintió ninguna pieza (agarre={cierre.agarre}, posición={cierre.posicion}): "
                 "¿está en esa casilla?"
             )
-        self.cliente.mover_a_pose(self._pose(origen, seguro, pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(origen, seguro, pieza), lineal=True, **self._lento())  # y sube despacio con la pieza agarrada
         if self.pinza.estado().agarre != AGARRE_SOSTIENE:
             self._retirarse(origen, apertura, pieza)
             raise PiezaNoAgarrada(f"Se le cayó la pieza de {origen} al subirla", reintentable=False)
         self.cliente.mover_a_pose(self._pose(destino, seguro, pieza), lineal=True)
-        self.cliente.mover_a_pose(self._pose(destino, tipo_pieza=pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(destino, self.parametros.elevacion_al_soltar_mm, pieza), lineal=True, **self._lento())  # no baja del todo al soltar y llega despacio
         self.pinza.mover_a(min(POSICION_ABIERTA, apertura + self.parametros.apertura_extra_soltar))  # soltar, más abierta que al agarrar
-        self.cliente.mover_a_pose(self._pose(destino, seguro, pieza), lineal=True)
+        self.cliente.mover_a_pose(self._pose(destino, seguro, pieza), lineal=True, **self._lento())

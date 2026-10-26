@@ -23,9 +23,11 @@ from backend.servicios.brazo.calibracion_brazo import (
     ParametrosAgarre,
     cargar_calibracion_brazo,
     cargar_parametros_agarre,
+    construir_calibracion,
+    guardar_calibracion_brazo,
     guardar_parametros_agarre,
 )
-from backend.servicios.brazo import geometria_brazo, rutinas
+from backend.servicios.brazo import geometria_brazo, rutinas, zonas
 from backend.servicios.brazo.cliente_dobot import MODOS_DE_FALLA, ErrorDobot
 from backend.servicios.brazo.ejecutor_movimiento import EjecutorReal
 from backend.servicios.brazo.planificador_movimiento import Paso, cementerio
@@ -103,9 +105,10 @@ def conectar(host: str = "192.168.5.1", puerto: int = 29999, emulador: bool = Fa
                 posiciones_casillas=calibracion.posiciones_casillas if calibracion else None,
                 orientacion=calibracion.orientacion if calibracion else None,
                 angulos_cero=calibracion.angulos_cero if calibracion else None,
-                velocidad_global=VELOCIDAD_GLOBAL_INICIAL,
+                velocidad_global=agarre.velocidad_global,  # la guardada en los parámetros (20 % si nunca se guardó otra)
                 parametros=agarre,
             )
+            ejecutor.cliente.aceleracion, ejecutor.cliente.velocidad = agarre.aceleracion, agarre.velocidad
             ejecutor.cliente.timeout_segundos = 5.0
             ejecutor.conectar(inicializar_pinza=False)  # inicializar la pinza mueve los dedos: se hace a pedido
         except (OSError, ErrorDobot, RuntimeError, ValueError) as error:
@@ -224,7 +227,7 @@ def parar() -> dict:
 # --- parámetros -----------------------------------------------------------------------------------------------------------
 _RANGOS = {
     "velocidad_global": (1, 100), "aceleracion": (1, 100), "velocidad": (1, 100), "fuerza": (20, 100), "velocidad_pinza": (1, 100),
-    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 30), "giro_diagonal_grados": (-180, 180),
+    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 30), "corrimiento_x_mm": (-30, 30), "corrimiento_y_mm": (-30, 30), "altura_borde_mm": (0, 50), "holgura_traslado_mm": (0, 60), "elevacion_al_soltar_mm": (0, 30), "velocidad_bajada": (1, 100), "aceleracion_bajada": (1, 100), "giro_diagonal_grados": (-180, 180),
 }
 
 
@@ -235,8 +238,8 @@ def parametros() -> dict:
         "velocidad_global": cliente.velocidad_global, "aceleracion": cliente.aceleracion, "velocidad": cliente.velocidad,
         "fuerza": agarre.fuerza, "velocidad_pinza": agarre.velocidad_pinza, "apertura_aproximacion": agarre.apertura_aproximacion,
         "apertura_extra_soltar": agarre.apertura_extra_soltar, "largo_pinza_mm": agarre.largo_pinza_mm,
-        "aperturas_por_pieza": dict(agarre.aperturas_por_pieza), "altura_segura_mm": agarre.altura_segura_mm,
-        "margen_agarre_mm": agarre.margen_agarre_mm, "margenes_por_pieza": dict(agarre.margenes_por_pieza),
+        "aperturas_por_pieza": dict(agarre.aperturas_por_pieza), "altura_segura_mm": agarre.altura_segura_mm, "corrimiento_x_mm": agarre.corrimiento_x_mm, "corrimiento_y_mm": agarre.corrimiento_y_mm, "alturas_piezas_mm": dict(agarre.alturas_piezas_mm), "altura_borde_mm": agarre.altura_borde_mm, "holgura_traslado_mm": agarre.holgura_traslado_mm,
+        "margen_agarre_mm": agarre.margen_agarre_mm, "elevacion_al_soltar_mm": agarre.elevacion_al_soltar_mm, "velocidad_bajada": agarre.velocidad_bajada, "aceleracion_bajada": agarre.aceleracion_bajada, "limites_mesa": agarre.limites_mesa, "zonas_prohibidas": list(agarre.zonas_prohibidas), "margenes_por_pieza": dict(agarre.margenes_por_pieza),
         "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
         "cementerio_origen": agarre.cementerio_origen, "cementerio_paso": agarre.cementerio_paso, "cementerio_paso_fila": agarre.cementerio_paso_fila,
         "cementerio_columnas": agarre.cementerio_columnas, "reservas": dict(agarre.reservas),
@@ -250,14 +253,28 @@ def _es_par(valor) -> bool:
 def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
     """Valida y aplica los parámetros dados (los que no vienen quedan igual). Con `guardar` y brazo real, los deja en `brazo.json`."""
     ejecutor = _ejecutor()
-    for clave, valor in valores.items():
-        if clave in _RANGOS:
+    valores = dict(valores)
+    for clave, valor in list(valores.items()):
+        if clave == "zonas_prohibidas":
+            try:
+                valores[clave] = zonas.validar_zonas(valor)
+            except ValueError as error:
+                raise ErrorControl(422, str(error)) from error
+        elif clave == "limites_mesa":
+            try:
+                valores[clave] = zonas.validar_limites(valor)
+            except ValueError as error:
+                raise ErrorControl(422, str(error)) from error
+        elif clave in _RANGOS:
             minimo, maximo = _RANGOS[clave]
             if not isinstance(valor, (int, float)) or not minimo <= valor <= maximo:
                 raise ErrorControl(422, f"{clave} debe estar entre {minimo} y {maximo}")
         elif clave == "aperturas_por_pieza":
             if not isinstance(valor, dict) or any(k not in "pnbrqk" or len(k) != 1 or not isinstance(v, int) or not 0 <= v <= 1000 for k, v in valor.items()):
                 raise ErrorControl(422, "aperturas_por_pieza: letras p n b r q k con valores de 0 a 1000")
+        elif clave == "alturas_piezas_mm":
+            if not isinstance(valor, dict) or any(k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 200 for k, v in valor.items()):
+                raise ErrorControl(422, "alturas_piezas_mm: letras p n b r q k con valores de 0 a 200 (mm)")
         elif clave == "margenes_por_pieza":
             if not isinstance(valor, dict) or any(
                 k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 30
@@ -280,7 +297,7 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
             raise ErrorControl(422, f"Parámetro desconocido: {clave}")
     cliente = ejecutor.cliente
     campos_agarre = {k: v for k, v in valores.items() if k in {f.name for f in dataclasses.fields(ParametrosAgarre)}}
-    for k in ("fuerza", "apertura_aproximacion", "apertura_extra_soltar", "velocidad_pinza"):
+    for k in ("fuerza", "apertura_aproximacion", "apertura_extra_soltar", "velocidad_pinza", "velocidad_global", "aceleracion", "velocidad", "velocidad_bajada", "aceleracion_bajada"):
         if k in campos_agarre:
             campos_agarre[k] = int(campos_agarre[k])
     ejecutor.parametros = dataclasses.replace(ejecutor.parametros, **campos_agarre)
@@ -658,9 +675,30 @@ def mover_articulaciones(angulos: list[float]) -> dict:
             problemas = geometria_brazo.problemas_de_trayectoria(list(_ejecutor().cliente.angulos()), list(destino), _z_tope_mm(), _largo_pinza_m())
         except (OSError, ErrorDobot, RuntimeError):
             problemas = []  # sin lectura de la pose actual solo se valida el destino
+    if not problemas:
+        problemas = _problemas_de_zonas_en_camino(destino)
     if problemas:
         raise ErrorControl(422, f"Movimiento imposible: {problemas[0]}")
     return _lanzar_manual("Mover articulaciones", lambda cliente: cliente.mover_a_angulos(destino))
+
+
+def _problemas_de_zonas_en_camino(destino: tuple[float, ...]) -> list[str]:
+    """Si el brazo, yendo de donde está a `destino` (en línea recta en ángulos, como `MovJ`), toca una zona prohibida o saca la punta de la mesa."""
+    ejecutor = _ejecutor()
+    p = ejecutor.parametros
+    if not p.zonas_prohibidas and not p.limites_mesa:
+        return []
+    largo = p.largo_pinza_mm / 1000.0
+    try:
+        actual = list(ejecutor.cliente.angulos())
+    except (OSError, ErrorDobot, RuntimeError):
+        return zonas.problemas_de_brazo(list(destino), p, largo)
+    problemas: list[str] = []
+    pasos = max(2, int(max(abs(a - b) for a, b in zip(actual, destino)) / geometria_brazo.GRADOS_POR_MUESTRA) + 1)
+    for k in range(1, pasos + 1):
+        angulos = [a + (b - a) * k / pasos for a, b in zip(actual, destino)]
+        problemas += [t for t in zonas.problemas_de_brazo(angulos, p, largo) if t not in problemas]
+    return problemas
 
 
 def ir_a_posicion_inicial() -> dict:
@@ -668,6 +706,8 @@ def ir_a_posicion_inicial() -> dict:
     cero = _ejecutor().angulos_cero
     if cero is None:
         raise ErrorControl(409, "No hay posición inicial calibrada (calibracion_local/brazo.json)")
+    if problemas := _problemas_de_zonas_en_camino(tuple(cero)):
+        raise ErrorControl(422, f"No se mueve nada: {problemas[0]}")
     return _lanzar_manual("Volver a la posición inicial", lambda cliente: cliente.mover_a_angulos(tuple(cero)))
 
 
@@ -738,6 +778,10 @@ def probar_lugar(lugar: str) -> dict:
         raise ErrorControl(409, str(error)) from error
     seguro = ejecutor.parametros.altura_segura_mm
     cero = ejecutor.angulos_cero
+    camino = [ejecutor._pose(lugar, seguro)[:3], ejecutor._pose(lugar, MARGEN_PRUEBA_MM)[:3], ejecutor._pose(lugar, seguro)[:3]]
+    problemas = [t for a, b in zip(camino, camino[1:]) for t in zonas.problemas_de_tramo(a, b, ejecutor.parametros)] + zonas.problemas_de_punto(*camino[0], ejecutor.parametros)
+    if problemas:
+        raise ErrorControl(422, f"No se mueve nada: {problemas[0]}")
 
     def accion(cliente) -> None:
         if cero is not None:
@@ -749,6 +793,78 @@ def probar_lugar(lugar: str) -> dict:
             cliente.mover_a_angulos(tuple(cero))
 
     return _lanzar_manual(f"Probar {lugar} (sin pieza)", accion)
+
+
+_centrando: dict = {"casilla": None, "tipo": "p"}
+"""La casilla sobre la que se está centrando la pinza (entre «bajar» y «subir»)."""
+
+
+def centrar_bajar(casilla: str, tipo_pieza: str = "p") -> dict:
+    """Baja despacio, con la pinza abierta (sin cerrarla), sobre la pieza de `casilla` y SE QUEDA ahí: así se ve si los dedos rodean la pieza centrados y se corrige con
+    `mover_relativo` (milímetro a milímetro) antes de `centrar_guardar`. Se sube con `centrar_subir`."""
+    ejecutor = _ejecutor()
+    nombre = casilla.lower()
+    _casilla_o_error(nombre)
+    if tipo_pieza.lower() not in {"p", "n", "b", "r", "q", "k"}:
+        raise ErrorControl(422, "tipo_pieza debe ser p, n, b, r, q o k")
+    if ejecutor.posiciones_casillas is None or ejecutor.orientacion is None:
+        raise ErrorControl(409, "El brazo no tiene calibración del tablero (calibracion_local/brazo.json)")
+    try:
+        _ = ejecutor.parametros.z_agarre_para(tipo_pieza)
+        ejecutor.parametros.apertura_para(tipo_pieza)
+    except RuntimeError as error:
+        raise ErrorControl(409, str(error)) from error
+    problemas = zonas.problemas_de_punto(*ejecutor._pose(nombre, 0.0, tipo_pieza)[:3], ejecutor.parametros)
+    if problemas:
+        raise ErrorControl(422, f"No se mueve nada: {problemas[0]}")
+    cero = ejecutor.angulos_cero
+
+    def accion(cliente) -> None:
+        _preparar_pinza(ejecutor)
+        if cero is not None:
+            cliente.mover_a_angulos(tuple(cero))
+        ejecutor.bajar_a(nombre, tipo_pieza)
+
+    _centrando.update(casilla=nombre, tipo=tipo_pieza.lower())
+    return _lanzar_manual(f"Bajar sobre {nombre} para centrar la pinza (sin cerrar)", accion)
+
+
+def centrar_guardar() -> dict:
+    """Con la pinza donde se la dejó (centrada sobre la pieza, a mano o con `mover_relativo`): guarda cuánto se corre respecto de donde la calibración decía que estaba esa casilla,
+    y desde ahí TODO lo que el brazo hace sobre el tablero lleva ese corrimiento. Lo guarda en `brazo.json` (con el brazo real)."""
+    ejecutor = _ejecutor()
+    casilla = _centrando["casilla"]
+    if casilla is None:
+        raise ErrorControl(409, "Primero baja la pinza sobre una pieza («Bajar sobre la pieza»)")
+    try:
+        pose = ejecutor.cliente.pose()
+    except (OSError, ErrorDobot, RuntimeError) as error:
+        raise ErrorControl(503, f"No se pudo leer la posición del brazo: {error}") from error
+    nominal = ejecutor.posiciones_casillas[casilla]
+    dx, dy = round(pose[0] - nominal[0], 1), round(pose[1] - nominal[1], 1)
+    if max(abs(dx), abs(dy)) > 30:
+        raise ErrorControl(422, f"La pinza está a {max(abs(dx), abs(dy)):.0f} mm de donde la calibración pone {casilla}: es demasiado para un corrimiento (máximo 30 mm). Calibra de nuevo el tablero.")
+    ejecutor.parametros = dataclasses.replace(ejecutor.parametros, corrimiento_x_mm=dx, corrimiento_y_mm=dy)
+    if _estado.emulador is None:
+        guardar_parametros_agarre(ejecutor.parametros)
+    return {"corrimiento_x_mm": dx, "corrimiento_y_mm": dy, "casilla": casilla, **estado()}
+
+
+def centrar_subir() -> dict:
+    """Sube a altura segura sobre la casilla que se estaba centrando y vuelve a la posición de descanso."""
+    ejecutor = _ejecutor()
+    casilla, tipo = _centrando["casilla"], _centrando["tipo"]
+    if casilla is None:
+        raise ErrorControl(409, "No hay una pinza bajada para subir")
+    cero = ejecutor.angulos_cero
+
+    def accion(cliente) -> None:
+        ejecutor.subir_de(casilla, tipo)
+        if cero is not None:
+            cliente.mover_a_angulos(tuple(cero))
+
+    _centrando["casilla"] = None
+    return _lanzar_manual(f"Subir de {casilla}", accion)
 
 
 def mover_relativo(dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, velocidad_mm_s: int = 20) -> dict:
@@ -841,19 +957,20 @@ def plan_de_movimiento(
     """ENSAYO: los pasos y poses por los que pasaría la prueba (misma secuencia que `ejecutar_pasos`), sin mover nada."""
     ejecutor = _ejecutor()
     pasos = _pasos_de_prueba(ejecutor, origen, destino, tipo_pieza, captura, tipo_capturada, al_cementerio, casilla_cementerio)
-    p, seguro = ejecutor.parametros, ejecutor.parametros.altura_segura_mm
+    p = ejecutor.parametros
     plan = [{"paso": "Ir a la posición inicial", "pose": None}]
     for paso in pasos:
         apertura = p.apertura_para(paso.pieza)
         o, d = paso.origen, paso.destino
+        seguro = ejecutor._seguro(paso.pieza)
         plan += [
             {"paso": f"Abrir la pinza a {apertura}", "pose": None},
             {"paso": f"Ir sobre {_nombre_de_lugar(o)} (altura segura)", "pose": list(ejecutor._pose(o, seguro))},
-            {"paso": f"Bajar a {_nombre_de_lugar(o)}", "pose": list(ejecutor._pose(o))},
+            {"paso": f"Bajar a {_nombre_de_lugar(o)}", "pose": list(ejecutor._pose(o, tipo_pieza=paso.pieza))},
             {"paso": "Cerrar la pinza y comprobar que agarró la pieza", "pose": None},
             {"paso": "Subir con la pieza", "pose": list(ejecutor._pose(o, seguro))},
             {"paso": f"Trasladar sobre {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, seguro))},
-            {"paso": f"Bajar a {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d))},
+            {"paso": f"Bajar a {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, p.elevacion_al_soltar_mm, paso.pieza))},
             {"paso": f"Soltar la pieza (abrir la pinza a {min(1000, apertura + p.apertura_extra_soltar)})", "pose": None},
             {"paso": f"Subir de {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, seguro))},
         ]
@@ -864,6 +981,112 @@ def plan_de_movimiento(
 def diagnostico(cuantos: int = 60) -> list[dict]:
     """Los últimos comandos que se le mandaron al controlador (hora, hilo, comando, resultado), del más viejo al más nuevo: para ver cómo se cruzaron cuando algo falla."""
     return list(_ejecutor().cliente.historial)[-cuantos:]
+
+
+def _sugerencia_de_cementerio(posiciones: dict[str, tuple[float, float, float]], parametros=None) -> dict:
+    """Dónde poner el cementerio y las damas de reserva para ESTE tablero: las casillas del cementerio del mismo tamaño que las del tablero, pegado a uno de sus lados (a dos casillas) y
+    las reservas al lado contrario. Prueba los cuatro lados (derecha de la columna h, izquierda de la a, detrás de la fila 8, delante de la 1) y se queda con el primero donde TODAS las
+    casillas del cementerio y las reservas caen dentro de los límites de la mesa y fuera de las zonas prohibidas (el trípode de la cámara, etc.). Si ninguno sirve, devuelve el primero con
+    un aviso. Salen de la propia calibración, así que sirven con cualquier tamaño y giro del tablero. Son una PROPUESTA: hay que comprobarlas con «Probar sin pieza»."""
+    a1, h1, a8 = (np.array(posiciones[c][:2]) for c in ("a1", "h1", "a8"))
+    por_columna, por_fila = (h1 - a1) / 7.0, (a8 - a1) / 7.0
+    redondeado = lambda v: [round(float(v[0]), 1), round(float(v[1]), 1)]  # noqa: E731
+    z = posiciones["a1"][2]
+
+    def propuesta(lado: str) -> tuple[dict, list[np.ndarray]]:
+        if lado == "derecha":
+            origen, paso, paso_fila, reserva = h1 + 2 * por_columna, por_fila, por_columna, a1 - 2 * por_columna
+        elif lado == "izquierda":
+            origen, paso, paso_fila, reserva = a1 - 2 * por_columna, por_fila, -por_columna, h1 + 2 * por_columna
+        elif lado == "atras":
+            origen, paso, paso_fila, reserva = a8 + 2 * por_fila, por_columna, por_fila, a1 - 2 * por_fila
+        else:  # delante
+            origen, paso, paso_fila, reserva = a1 - 2 * por_fila, por_columna, -por_fila, a8 + 2 * por_fila
+        lateral = paso if lado in ("derecha", "izquierda") else por_columna
+        reservas = {"dama_negra": reserva, "dama_blanca": reserva + 1.2 * (por_fila if lado in ("derecha", "izquierda") else por_columna)}
+        puntos = [origen + c * paso + f * paso_fila for f in range(4) for c in range(8)][:30] + list(reservas.values())
+        return {"lado": lado, "cementerio_origen": redondeado(origen), "cementerio_paso": redondeado(paso), "cementerio_paso_fila": redondeado(paso_fila), "cementerio_columnas": 8,
+                "reservas": {k: redondeado(v) for k, v in reservas.items()}}, puntos
+
+    primera = None
+    for lado in ("derecha", "izquierda", "atras", "delante"):
+        sugerencia, puntos = propuesta(lado)
+        primera = primera or sugerencia
+        if parametros is None or not any(zonas.problemas_de_punto(float(p[0]), float(p[1]), z, parametros) for p in puntos):
+            return sugerencia
+    return {**primera, "aviso": "Ningún lado del tablero tiene lugar para el cementerio dentro de los límites de la mesa y fuera de las zonas prohibidas: revisa los límites o las zonas."}
+
+
+def _resumen_de_calibracion(calibracion: CalibracionBrazo, parametros=None, avisos_extra: tuple[str, ...] = ()) -> dict:
+    posiciones = calibracion.posiciones_casillas
+    paso = float(np.linalg.norm((np.array(posiciones["h1"][:2]) - np.array(posiciones["a1"][:2])) / 7.0))
+    return {
+        "casillas": {c: [round(v, 1) for v in posiciones[c]] for c in ("a1", "h1", "a8", "h8") if c in posiciones}, "paso_mm": round(paso, 1),
+        "angulos_cero": [round(v, 1) for v in calibracion.angulos_cero], "avisos": list(calibracion.avisos) + list(avisos_extra), "sugerencia_cementerio": _sugerencia_de_cementerio(posiciones, parametros),
+    }
+
+
+Z_AIRE_AL_ENSENAR_MM = 1.5
+"""Cuánto aire se deja, al enseñar una esquina, entre la punta de la pinza y el tablero (se pide «1 o 2 mm»): la altura del tablero es la de las esquinas menos esto."""
+
+
+def tablero_calibrado() -> dict | None:
+    """La calibración del tablero que usa el brazo ahora (el tamaño de sus casillas, las cuatro esquinas, la sugerencia de cementerio), o `None` si no hay."""
+    calibracion = _estado.calibracion or cargar_calibracion_brazo()
+    parametros = _estado.ejecutor.parametros if _estado.ejecutor is not None else cargar_parametros_agarre()
+    return None if calibracion is None else _resumen_de_calibracion(calibracion, parametros)
+
+
+def calibrar_tablero(puntos: dict[str, list[float]], angulos_cero: list[float]) -> dict:
+    """Guarda la calibración del tablero con las poses `(x, y, z, rx, ry, rz)` de a1, h1 y a8 (y h8, opcional) y los ángulos de la posición cero, tomadas del brazo real llevado a mano,
+    y la aplica al brazo conectado sin reconectar. Las aperturas y demás parámetros de agarre no se tocan.
+
+    Raises:
+        ErrorControl: sin conexión, conectado al emulador (usa su propia calibración) o los datos no son válidos (faltan casillas, la pinza apunta distinto, etc.).
+    """
+    ejecutor = _ejecutor()
+    if _estado.emulador is not None:
+        raise ErrorControl(409, "El emulador usa su propia calibración: conectate al brazo real para calibrar el tablero")
+    if _estado.hilo is not None and _estado.hilo.is_alive():
+        raise ErrorControl(409, "Hay un movimiento en curso: esperá a que termine")
+    try:
+        calibracion = construir_calibracion(tuple(float(v) for v in angulos_cero), {c: tuple(float(v) for v in p) for c, p in puntos.items()})
+    except (ValueError, TypeError) as error:
+        raise ErrorControl(422, str(error)) from error
+    parametros = ejecutor.parametros
+    largo = parametros.largo_pinza_mm / 1000.0
+    en_zona = zonas.problemas_de_brazo(list(calibracion.angulos_cero), parametros, largo)
+    if en_zona:  # la posición de descanso no puede estar dentro de una zona prohibida: no se guarda
+        raise ErrorControl(422, "La posición de descanso toca un lugar prohibido: " + "; ".join(en_zona[:2]) + ". Llévala a otro lado y vuelve a tomarla.")
+    avisos = list(_avisos_de_descanso(calibracion, parametros, largo))
+    guardar_calibracion_brazo(tuple(float(v) for v in angulos_cero), {c: tuple(float(v) for v in p) for c, p in puntos.items()})
+    ejecutor.posiciones_casillas, ejecutor.orientacion, ejecutor.angulos_cero = calibracion.posiciones_casillas, calibracion.orientacion, calibracion.angulos_cero
+    _estado.calibracion = calibracion
+    # Lo que se puede calcular se calcula: la altura del tablero sale de las esquinas (se enseñaron a 1 o 2 mm de aire) y el cementerio y las reservas, de su tamaño y de la mesa.
+    z_esquinas = [float(p[2]) for p in puntos.values()]
+    z_tope = round(sum(z_esquinas) / len(z_esquinas) - Z_AIRE_AL_ENSENAR_MM, 1)
+    sugerencia = _sugerencia_de_cementerio(calibracion.posiciones_casillas, parametros)
+    nuevos = {k: sugerencia[k] for k in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila", "cementerio_columnas", "reservas")}
+    ejecutor.parametros = dataclasses.replace(parametros, z_tope=z_tope, **nuevos)
+    guardar_parametros_agarre(ejecutor.parametros)
+    resumen = _resumen_de_calibracion(calibracion, ejecutor.parametros, tuple(avisos))
+    return {"guardada": True, **resumen, "z_tope": z_tope, "cementerio_aplicado": sugerencia}
+
+
+def _avisos_de_descanso(calibracion: CalibracionBrazo, parametros, largo: float) -> list[str]:
+    """Avisos sobre la posición de descanso (no la rechazan): si la punta queda baja (podría rozar piezas al volver) o encima del tablero (taparía la cámara)."""
+    x, y, z = zonas.punta_en_mm(calibracion.angulos_cero, largo)
+    posiciones = calibracion.posiciones_casillas
+    avisos = []
+    z_tablero = posiciones["a1"][2]
+    if z < z_tablero + parametros.altura_segura_mm + 30:
+        avisos.append(f"La punta de la pinza en la posición de descanso queda a {z - z_tablero:.0f} mm sobre el tablero: puede rozar las piezas (el rey mide unos 90 mm). Súbela por lo menos a {parametros.altura_segura_mm + 30:.0f} mm.")
+    a1, h1, a8 = (np.array(posiciones[c][:2]) for c in ("a1", "h1", "a8"))
+    u, v = h1 - a1, a8 - a1
+    coord = np.linalg.solve(np.array([u, v]).T, np.array([x, y]) - a1)
+    if -0.15 <= coord[0] <= 1.15 and -0.15 <= coord[1] <= 1.15:
+        avisos.append("La punta en la posición de descanso queda encima del tablero: taparía la cámara y podría golpear piezas. Llévala fuera del tablero.")
+    return avisos
 
 
 def conectado() -> bool:

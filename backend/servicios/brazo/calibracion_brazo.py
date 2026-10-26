@@ -187,6 +187,22 @@ class ParametrosAgarre:
     largo_pinza_mm: float = 217.0
     """Distancia de la brida del brazo a la punta de los dedos, a lo largo de la herramienta. Por defecto los 177 mm del modelo (URDF) más los 40 mm de los
     dedos largos: es una ESTIMACIÓN, hay que medirla. La usan las validaciones de mesa, tablero y choque, y el dibujo del esqueleto."""
+    corrimiento_x_mm: float = 0.0
+    """Cuánto se corre (en X, en las coordenadas del brazo) todo lo que el brazo hace sobre las casillas del tablero: corrige que la pinza no baje centrada en la casilla. Se mide con la pantalla «Centrar sobre la pieza»."""
+    corrimiento_y_mm: float = 0.0
+    """Lo mismo en Y."""
+    alturas_piezas_mm: dict[str, float] = field(default_factory=dict)
+    """Alto de cada tipo de pieza (`"p"`, `"n"`, `"b"`, `"r"`, `"q"`, `"k"`), medido con una regla: de ahí sale a qué altura tiene que pasar la pieza que lleva el brazo para no rozar las que están en el tablero."""
+    altura_borde_mm: float = 0.0
+    """Cuánto sobresale el borde (el marco) del tablero por encima de la superficie donde apoyan las piezas. Las casillas del borde se agarran por lo menos a esta altura más 2 mm, para que los dedos no choquen con el marco."""
+    holgura_traslado_mm: float = 15.0
+    """Aire que tiene que quedar entre lo más bajo de la pieza que se lleva y lo más alto de cualquier pieza del tablero al trasladarla."""
+    velocidad_bajada: int = 10
+    """Velocidad (%) de los tramos verticales cerca del tablero (bajar a agarrar o a soltar, y la primera subida): lenta, para que la punta llegue sin golpear y no doble ni marque el tablero."""
+    aceleracion_bajada: int = 5
+    """Aceleración (%) de esos mismos tramos."""
+    elevacion_al_soltar_mm: float = 0.0
+    """Al SOLTAR una pieza (en una casilla o en el cementerio) la punta se queda esto más arriba que al agarrar: si los dedos bajan del todo al soltar, rozan o chocan con el tablero. Se suma a la altura de agarre de esa pieza."""
     apertura_extra_soltar: int = 250
     """Cuánto más se abre la pinza al SOLTAR que al agarrar (se suma a la apertura de la pieza, tope 1000): así los dedos quedan bien lejos de la pieza."""
     aperturas_por_pieza: dict[str, int] = field(default_factory=dict)
@@ -200,6 +216,16 @@ class ParametrosAgarre:
     """Altura sobre el agarre para trasladarse: los dedos pasan por encima del rey, la pieza más alta."""
     fuerza: int = 20
     velocidad_pinza: int = 20
+    velocidad_global: int = 20
+    """`SpeedFactor` (1 a 100) con el que se conecta el brazo: se guarda con el resto de los parámetros y se aplica al conectar."""
+    aceleracion: int = 10
+    """Aceleración (%) por defecto de los movimientos."""
+    velocidad: int = 20
+    """Velocidad (%) por defecto de los movimientos."""
+    limites_mesa: list[float] | None = None
+    """`[x_min, y_min, x_max, y_max]` (mm, mismo sistema que las poses): el rectángulo de la mesa donde puede estar la punta de la pinza. Fuera de él no se mueve nada."""
+    zonas_prohibidas: list[dict] = field(default_factory=list)
+    """Lugares adonde el brazo no puede ir (el trípode de la cámara, la cámara…): ver `zonas.py`."""
     cementerio_origen: list[float] | None = None
     """(x, y) de la primera casilla del cementerio, fuera del tablero, a la misma altura que él: ahí van las piezas capturadas y los peones coronados."""
     cementerio_paso: list[float] = field(default_factory=lambda: [30.0, 0.0])
@@ -224,6 +250,14 @@ class ParametrosAgarre:
         if tipo == "p":
             return self.apertura_aproximacion
         raise RuntimeError(f"Falta la apertura de la pinza para la pieza '{tipo}': medí su ancho máximo y agregala a aperturas_por_pieza")
+
+    def altura_de_traslado_para(self, tipo_pieza: str, altura_segura_mm: float | None = None) -> float:
+        """Cuánto SOBRE la altura de agarre de `tipo_pieza` hay que subir para trasladarla: lo que pide `altura_segura_mm`, o más si hace falta para pasar por encima de la pieza más alta del
+        tablero (`alturas_piezas_mm`) con `holgura_traslado_mm` de aire."""
+        base = self.altura_segura_mm if altura_segura_mm is None else altura_segura_mm
+        if not self.alturas_piezas_mm:
+            return base
+        return max(base, max(self.alturas_piezas_mm.values()) + self.holgura_traslado_mm - self.margen_para(tipo_pieza))
 
     def margen_para(self, tipo_pieza: str) -> float:
         """Margen de agarre (mm sobre `z_tope`) para `tipo_pieza`: el propio si está medido en `margenes_por_pieza`, si no el de

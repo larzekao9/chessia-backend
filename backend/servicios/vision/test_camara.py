@@ -246,3 +246,59 @@ def test_buscar_camaras_las_prueba_a_la_vez_y_no_una_tras_otra(monkeypatch) -> N
 
     assert time.monotonic() - inicio < 1.8, "las probó una por una (5 x 0,5 s serían 2,5 s)"
     assert all(c["disponible"] for c in resultado)
+
+
+def test_esperar_foto_nueva_devuelve_cada_cuadro_una_sola_vez(monkeypatch) -> None:
+    """Pedir cuadros más rápido de lo que la cámara los entrega no repite ninguno: sin cuadro posterior, `None`."""
+    import numpy as np
+
+    from backend.servicios.vision import camara
+
+    class CapturaFalsa:
+        def __init__(self) -> None:
+            self.numero = 5
+            self.ultimo_cuadro_en = __import__("time").monotonic()  # llegó un cuadro hace un instante: la cámara no está colgada
+
+        def ultimo_frame(self):
+            return np.zeros((2, 2, 3), np.uint8)
+
+        def esperar_frame(self, despues_de, timeout=0.25):
+            return (self.numero, np.zeros((2, 2, 3), np.uint8)) if self.numero > despues_de else None
+
+    falsa = CapturaFalsa()
+    monkeypatch.setattr(camara, "_fuente_por_defecto", lambda _camara: 0)
+    monkeypatch.setattr(camara, "_captura_continua", lambda fuente, _camara="principal": falsa)
+    assert camara.esperar_foto_nueva(0)[0] == 5
+    assert camara.esperar_foto_nueva(5) is None  # todavía no llegó otro
+    falsa.numero = 6
+    assert camara.esperar_foto_nueva(5)[0] == 6
+
+
+def test_una_camara_que_deja_de_entregar_cuadros_se_reinicia(monkeypatch) -> None:
+    """Sin cuadros nuevos durante varios segundos la cámara se da por colgada: se suelta y se avisa (el próximo pedido la vuelve a abrir)."""
+    import time
+
+    import numpy as np
+
+    from backend.servicios.vision import camara
+
+    class CapturaColgada:
+        ultimo_cuadro_en = time.monotonic() - 10.0
+        detenida = False
+
+        def ultimo_frame(self):
+            return np.zeros((2, 2, 3), np.uint8)
+
+        def esperar_frame(self, despues_de, timeout=0.25):
+            return None
+
+        def detener(self):
+            self.detenida = True
+
+    colgada = CapturaColgada()
+    monkeypatch.setattr(camara, "_fuente_por_defecto", lambda _camara: 0)
+    monkeypatch.setattr(camara, "_captura_continua", lambda fuente, _camara="principal": colgada)
+    monkeypatch.setitem(camara._capturas, "principal", colgada)
+    with pytest.raises(RuntimeError, match="reiniciando"):
+        camara.esperar_foto_nueva(7)
+    assert colgada.detenida and "principal" not in camara._capturas

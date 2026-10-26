@@ -368,6 +368,8 @@ class IniciarSeguimientoRequest(BaseModel):
 
     fen: str | None = None
     camara: str = "principal"
+    intervalo_s: float = Field(1.0, ge=0.05, le=2.0)
+    """Cada cuántos segundos la pantalla pide un cuadro (de ahí sale cuántos cuadros quietos hacen falta para dar una jugada)."""
 
 
 class PosicionSeguimientoRequest(BaseModel):
@@ -379,7 +381,7 @@ def iniciar_seguimiento(cuerpo: IniciarSeguimientoRequest, _usuario_id: int = De
     """Empieza a seguir la partida por diferencias entre imágenes, desde `fen`, con la cámara calibrada (ver `seguimiento_jugadas`). 422 si el FEN es inválido, 409 si no está calibrada."""
     _validar_camara(cuerpo.camara)
     try:
-        return seguimiento_vivo.iniciar(cuerpo.fen, cuerpo.camara)
+        return seguimiento_vivo.iniciar(cuerpo.fen, cuerpo.camara, cuerpo.intervalo_s)
     except ValueError as error:
         raise HTTPException(status_code=409 if "calibrad" in str(error) else 422, detail=str(error)) from error
 

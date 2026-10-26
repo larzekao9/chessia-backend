@@ -1,4 +1,5 @@
 """Panel de control del brazo contra el emulador en memoria (sin hardware)."""
+import json
 import time
 
 import pytest
@@ -313,3 +314,124 @@ def test_la_prueba_de_captura_del_panel_funciona_en_el_emulador_sin_piezas_puest
     assert tarea["estado"] == "terminada", tarea["mensaje"]
     piezas = control_brazo._estado.emulador[0].tablero_piezas()
     assert piezas.get("d4", "").lower() == "p" and "c5" not in piezas  # el peón de c5 ahora está en d4; el de d4 salió al cementerio
+
+
+def test_la_velocidad_y_la_aceleracion_guardadas_se_aplican_al_conectar(cliente, monkeypatch) -> None:
+    """Lo que se guardó en los parámetros (velocidad global, aceleración, velocidad) es con lo que arranca el brazo y lo que muestra la pantalla."""
+    import dataclasses
+
+    from backend.servicios.brazo.simulador_dobot import calibracion_ejemplo as ejemplo
+
+    original = ejemplo.parametros_agarre_ejemplo
+    monkeypatch.setattr(ejemplo, "parametros_agarre_ejemplo", lambda: dataclasses.replace(original(), velocidad_global=40, aceleracion=15, velocidad=40))
+    _conectar(cliente)
+    p = cliente.get("/brazo/control/parametros").json()
+    assert (p["velocidad_global"], p["aceleracion"], p["velocidad"]) == (40, 15, 40)
+    cambiados = cliente.put("/brazo/control/parametros", json={"valores": {"velocidad_global": 30, "aceleracion": 12, "velocidad": 25}}).json()
+    assert (cambiados["velocidad_global"], cambiados["aceleracion"], cambiados["velocidad"]) == (30, 12, 25)
+    assert control_brazo._estado.ejecutor.parametros.velocidad_global == 30  # y quedan en los parámetros que se guardan en disco
+
+
+def test_calibrar_el_tablero_con_un_tablero_mas_grande_y_aplicarlo_sin_reconectar(cliente, monkeypatch, tmp_path) -> None:
+    """Se enseñan a1, h1, a8 y la posición cero (tablero con casillas de 40 mm): se guarda, se aplica al brazo conectado y se propone el cementerio para ese tamaño."""
+    from backend.servicios.brazo import calibracion_brazo
+    from backend.servicios.brazo.simulador_dobot import calibracion_ejemplo as ejemplo
+
+    monkeypatch.setattr(calibracion_brazo, "ARCHIVO_CALIBRACION_BRAZO", tmp_path / "brazo.json")
+    _conectar(cliente)
+    paso = 40.0
+    x0, y0, z, orient = 300.0, -140.0, 234.8, [-180.0, 0.0, -120.0]
+    puntos = {"a1": [x0, y0, z, *orient], "h1": [x0, y0 + 7 * paso, z, *orient], "a8": [x0 + 7 * paso, y0, z, *orient], "h8": [x0 + 7 * paso, y0 + 7 * paso, z, *orient]}
+    cuerpo = {"puntos": puntos, "angulos_cero": list(ejemplo.angulos_cero_ejemplo())}
+    assert cliente.post("/brazo/control/calibracion/tablero", json=cuerpo).status_code == 409  # el emulador usa su propia calibración
+
+    control_brazo._estado.emulador, simulador = None, control_brazo._estado.emulador  # se hace pasar por el brazo real (la calibración se guarda en el archivo de la prueba)
+    try:
+        r = cliente.post("/brazo/control/calibracion/tablero", json=cuerpo)
+        assert r.status_code == 200, r.text
+        datos = r.json()
+        assert datos["guardada"] and datos["paso_mm"] == 40.0 and datos["casillas"]["h8"][:2] == [300.0 + 280.0, -140.0 + 280.0]
+        assert control_brazo._estado.ejecutor.posiciones_casillas["h1"][:2] == pytest.approx((300.0, -140.0 + 280.0))  # aplicado sin reconectar
+        s = datos["sugerencia_cementerio"]
+        assert s["cementerio_paso"] == [40.0, 0.0] and s["cementerio_paso_fila"] == [0.0, 40.0]  # casillas del cementerio del mismo tamaño que las del tablero
+        assert s["cementerio_origen"] == [300.0, -140.0 + 280.0 + 80.0] and s["reservas"]["dama_negra"] == [300.0, -140.0 - 80.0]
+        assert (tmp_path / "brazo.json").exists() and cliente.get("/brazo/control/calibracion/tablero").json()["paso_mm"] == 40.0
+        # lo que se calcula solo: la altura del tablero (esquinas a z=234.8 menos 1.5 mm de aire) y el cementerio y las reservas, ya aplicados y guardados
+        assert datos["z_tope"] == 233.3 and control_brazo._estado.ejecutor.parametros.z_tope == 233.3
+        assert control_brazo._estado.ejecutor.parametros.cementerio_origen == s["cementerio_origen"] and datos["cementerio_aplicado"]["lado"] == "derecha"
+        guardado = json.loads((tmp_path / "brazo.json").read_text(encoding="utf-8"))["agarre"]
+        assert guardado["z_tope"] == 233.3 and guardado["cementerio_origen"] == s["cementerio_origen"]
+        malo = {**cuerpo, "puntos": {**puntos, "h1": [x0, y0 + 280.0, z, -180.0, 40.0, -120.0]}}  # la pinza apunta distinto en h1
+        assert cliente.post("/brazo/control/calibracion/tablero", json=malo).status_code == 422
+        assert cliente.post("/brazo/control/calibracion/tablero", json={**cuerpo, "puntos": {"a1": puntos["a1"]}}).status_code == 422  # faltan casillas
+    finally:
+        control_brazo._estado.emulador = simulador
+
+
+def test_las_zonas_prohibidas_se_validan_se_guardan_y_frenan_un_movimiento_por_angulos(cliente) -> None:
+    _conectar(cliente)
+    cliente.post("/brazo/control/habilitar")
+    zona = {"nombre": "Trípode de la cámara", "forma": "circulo", "x": 0.0, "y": 0.0, "radio": 50000.0}  # tapa todo el espacio del brazo
+    assert cliente.put("/brazo/control/parametros", json={"valores": {"zonas_prohibidas": [{"forma": "triangulo"}]}}).status_code == 422
+    assert cliente.put("/brazo/control/parametros", json={"valores": {"limites_mesa": [1, 2, 3]}}).status_code == 422
+    r = cliente.put("/brazo/control/parametros", json={"valores": {"zonas_prohibidas": [zona], "limites_mesa": [800, 100, -800, -900]}})
+    assert r.status_code == 200 and r.json()["zonas_prohibidas"][0]["nombre"] == "Trípode de la cámara" and r.json()["limites_mesa"] == [-800.0, -900.0, 800.0, 100.0]
+    angulos = list(cliente.get("/brazo/control/estado").json()["angulos"])
+    angulos[0] += 5.0
+    movimiento = cliente.post("/brazo/control/mover-articulaciones", json={"angulos": angulos})
+    assert movimiento.status_code == 422 and "prohibida" in movimiento.json()["detail"]  # frena el modo en vivo y las rutinas
+    assert cliente.post("/brazo/control/posicion-inicial").status_code == 422
+    cliente.put("/brazo/control/parametros", json={"valores": {"zonas_prohibidas": [], "limites_mesa": None}})
+    assert cliente.post("/brazo/control/mover-articulaciones", json={"angulos": angulos}).status_code == 200
+
+
+def test_la_posicion_de_descanso_no_puede_estar_en_una_zona_prohibida_y_avisa_si_queda_baja(cliente, monkeypatch, tmp_path) -> None:
+    from backend.servicios.brazo import calibracion_brazo
+    from backend.servicios.brazo.simulador_dobot import calibracion_ejemplo as ejemplo
+
+    monkeypatch.setattr(calibracion_brazo, "ARCHIVO_CALIBRACION_BRAZO", tmp_path / "brazo.json")
+    _conectar(cliente)
+    paso, x0, y0, z, orient = 40.0, 300.0, -140.0, 234.8, [-180.0, 0.0, -120.0]
+    puntos = {"a1": [x0, y0, z, *orient], "h1": [x0, y0 + 7 * paso, z, *orient], "a8": [x0 + 7 * paso, y0, z, *orient]}
+    cuerpo = {"puntos": puntos, "angulos_cero": list(ejemplo.angulos_cero_ejemplo())}
+    control_brazo._estado.emulador, simulador = None, control_brazo._estado.emulador
+    try:
+        todo = {"nombre": "Trípode", "forma": "circulo", "x": 0.0, "y": 0.0, "radio": 50000.0}
+        control_brazo._estado.ejecutor.parametros.zonas_prohibidas = [todo]
+        rechazada = cliente.post("/brazo/control/calibracion/tablero", json=cuerpo)
+        assert rechazada.status_code == 422 and "lugar prohibido" in rechazada.json()["detail"] and not (tmp_path / "brazo.json").exists()  # no se guarda
+        control_brazo._estado.ejecutor.parametros.zonas_prohibidas = []
+        r = cliente.post("/brazo/control/calibracion/tablero", json=cuerpo)
+        assert r.status_code == 200
+        bajo = {"puntos": {**puntos}, "angulos_cero": [0.0, -30.0, -150.0, 105.0, 90.0, 0.0]}  # una pose de descanso válida pero con la punta a 273 mm: a la altura de las piezas (el tablero está a 234.8)
+        avisos = cliente.post("/brazo/control/calibracion/tablero", json=bajo).json().get("avisos", [])
+        assert any("rozar" in a or "encima del tablero" in a for a in avisos)
+    finally:
+        control_brazo._estado.emulador = simulador
+
+
+def test_centrar_la_pinza_sobre_una_pieza_mide_y_guarda_el_corrimiento(cliente) -> None:
+    """Baja sobre la pieza, se la corre milímetro a milímetro y se guarda cuánto se corrió: desde ahí todo el tablero lleva ese corrimiento."""
+    _conectar(cliente)
+    cliente.post("/brazo/control/habilitar")
+    assert cliente.post("/brazo/control/centrar/guardar").status_code == 409  # sin haber bajado
+    assert cliente.post("/brazo/control/centrar/bajar", json={"casilla": "e2", "tipo_pieza": "p"}).status_code == 200
+    assert _esperar_tarea(cliente)["estado"] == "terminada"
+    antes = cliente.get("/brazo/control/parametros").json()
+    assert (antes["corrimiento_x_mm"], antes["corrimiento_y_mm"]) == (0.0, 0.0)
+    assert cliente.post("/brazo/control/mover-relativo", json={"dx": 3.0, "dy": -2.0, "dz": 0.0, "velocidad_mm_s": 20}).status_code == 200
+    assert _esperar_tarea(cliente)["estado"] == "terminada"
+    r = cliente.post("/brazo/control/centrar/guardar")
+    assert r.status_code == 200, r.text
+    assert abs(r.json()["corrimiento_x_mm"] - 3.0) < 1.0 and abs(r.json()["corrimiento_y_mm"] + 2.0) < 1.0 and r.json()["casilla"] == "e2"
+    despues = cliente.get("/brazo/control/parametros").json()
+    assert despues["corrimiento_x_mm"] == r.json()["corrimiento_x_mm"]
+    assert cliente.post("/brazo/control/centrar/subir").status_code == 200
+    assert _esperar_tarea(cliente)["estado"] == "terminada"
+    assert cliente.post("/brazo/control/centrar/bajar", json={"casilla": "z9", "tipo_pieza": "p"}).status_code == 422
+    # un corrimiento absurdo (la pinza lejos de la casilla) se rechaza
+    cliente.post("/brazo/control/centrar/bajar", json={"casilla": "e2", "tipo_pieza": "p"})
+    _esperar_tarea(cliente)
+    cliente.post("/brazo/control/mover-relativo", json={"dx": 60.0, "dy": 0.0, "dz": 0.0, "velocidad_mm_s": 100})
+    _esperar_tarea(cliente)
+    assert cliente.post("/brazo/control/centrar/guardar").status_code == 422

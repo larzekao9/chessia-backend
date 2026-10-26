@@ -30,6 +30,7 @@ import cv2
 import numpy as np
 
 from backend.servicios.vision import referencia_vacia as _ref
+from backend.servicios.vision import tablero as _tablero
 
 CAMBIO_MINIMO = 15.0
 """Cambio (en las unidades de `referencia_vacia.puntajes`, ya descontada la luz de fondo) desde el cual una casilla se considera cambiada. Con 230 jugadas reales
@@ -43,18 +44,54 @@ TOLERANCIA_CASILLAS = 1.0
 TICKS_CONFIRMAR = 2
 """Si hubo que tolerar una casilla, la misma jugada tiene que verse así en estos cuadros seguidos antes de aceptarla."""
 TICKS_PARCIAL = 6
+TICKS_INVALIDA = 2
+TICKS_BASE = 2
+TICKS_SUCIA = 4
+TICKS_AJUSTE = 3
 """Cuadros quietos seguidos con una jugada a medias (pieza levantada, capturada retirada) antes de avisar que la posición es inválida."""
+LADO = 400
+"""Lado, en píxeles, del tablero enderezado con el que se compara (la mitad que `referencia_vacia`: cuatro veces menos píxeles y la misma información para decidir qué casilla cambió)."""
+CASILLA = LADO // 8
+CENTRO = (CASILLA // 5, CASILLA * 4 // 5)
+"""Parte central de cada casilla que se mira (el 60 % del medio): los bordes se ven afectados por las piezas vecinas y por la perspectiva."""
+SEGUNDOS_QUIETO = 0.15
+"""Cuánto tiempo tiene que estar el tablero quieto para dar por hecha una jugada (con `ticks_para`, según el ritmo al que se mira)."""
+SEGUNDOS_BASE = 1.0
+"""Cuánto tiempo tiene que estar el tablero quieto para tomar la FOTO BASE (más que para dar una jugada: si se toma con la mano encima, todo lo que venga después se compara contra una mano)."""
+SEGUNDOS_BASE_SUCIA = 4.0
+"""Si un cambio que ninguna jugada explica (y que toca 5 casillas o más) dura tanto, la foto base probablemente tiene la mano encima: se vuelve a tomar."""
+SEGUNDOS_AJUSTE = 3.0
+"""Tras aceptar una jugada, durante este tiempo los cambios que solo tocan las casillas de esa jugada (la mano soltando la pieza, la pieza que se acomoda) se absorben."""
+SEGUNDOS_INVALIDA = 1.5
+"""Cuánto tiempo tiene que durar un cambio que ninguna jugada explica antes de avisar de posición inválida: una mano que se queda un momento sobre el tablero no es una alerta."""
+SEGUNDOS_PARCIAL = 6.0
 MAX_CANDIDATAS = 6
+EVIDENCIA_MINIMA = 6.0
+"""Cambio mínimo, en el origen y el destino de una jugada, para creerla aunque ninguna casilla llegue a `CAMBIO_MINIMO`: una pieza clara sobre una casilla clara (o una oscura
+sobre una oscura) casi no cambia la imagen, pero sigue siendo lo único que cambió."""
+DOMINIO_EVIDENCIA = 0.6
+"""El resto de las casillas tiene que cambiar menos que esta fracción de la evidencia de la jugada (que esas dos casillas destaquen del ruido)."""
+MARGEN_EVIDENCIA = 0.75
+"""Otra jugada, con otras casillas, no puede tener más que esta fracción de la evidencia de la elegida (si no, hay duda)."""
 NOMBRES = _ref.NOMBRES
 """Orden de las 64 casillas de los puntajes: a8, b8 … h1."""
 _PIEZAS = {chess.PAWN: ("peón", False), chess.KNIGHT: ("caballo", False), chess.BISHOP: ("alfil", False), chess.ROOK: ("torre", True),
            chess.QUEEN: ("dama", True), chess.KING: ("rey", False)}
 
 
+def ticks_para(intervalo_s: float) -> dict[str, int]:
+    """Los cuadros que equivalen a `SEGUNDOS_QUIETO` (quieto y confirmar), `SEGUNDOS_INVALIDA` y `SEGUNDOS_PARCIAL`, para mirar el tablero cada `intervalo_s` segundos.
+    A 1 s por cuadro son los valores de siempre (2, 2, 2 y 6); a 1/30 s (un cuadro de la cámara), 4, 4, 45 y 180: la jugada se reconoce ~0,15 s después de soltar la pieza."""
+    intervalo = max(float(intervalo_s), 0.01)
+    return {"ticks_estable": max(2, round(SEGUNDOS_QUIETO / intervalo)), "ticks_confirmar": max(2, round(SEGUNDOS_QUIETO / intervalo)),
+            "ticks_invalida": max(TICKS_INVALIDA, round(SEGUNDOS_INVALIDA / intervalo)), "ticks_base": max(TICKS_BASE, round(SEGUNDOS_BASE / intervalo)),
+            "ticks_sucia": max(TICKS_SUCIA, round(SEGUNDOS_BASE_SUCIA / intervalo)), "ticks_ajuste": max(TICKS_AJUSTE, round(SEGUNDOS_AJUSTE / intervalo)), "ticks_parcial": max(TICKS_PARCIAL, round(SEGUNDOS_PARCIAL / intervalo))}
+
+
 def _preparar(imagen: np.ndarray, esquinas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """El tablero enderezado (BGR) y el mismo en LAB suavizado: lo que se compara entre cuadros."""
-    enderezada = _ref._enderezada(imagen, esquinas)
-    return enderezada, _ref._lab(enderezada)
+    enderezada = _tablero.enderezar_tablero(imagen, np.asarray(esquinas, dtype=np.float32), LADO)
+    return enderezada, cv2.GaussianBlur(cv2.cvtColor(enderezada, cv2.COLOR_BGR2LAB), (3, 3), 0).astype(np.float32)
 
 
 def _a_lab(imagen: np.ndarray, esquinas: np.ndarray) -> np.ndarray:
@@ -65,7 +102,7 @@ def _a_lab(imagen: np.ndarray, esquinas: np.ndarray) -> np.ndarray:
 def _igualar_luz(antes: np.ndarray, despues: np.ndarray) -> np.ndarray:
     """`despues` con el brillo y el contraste de `antes`: un ajuste lineal (ganancia y desplazamiento) del canal de luz, calculado con los píxeles que casi no
     cambiaron (los demás, las piezas movidas, no deben influir). Así la exposición automática de una webcam no parece una jugada."""
-    luz_a, luz_d = antes[::8, ::8, 0].ravel(), despues[::8, ::8, 0].ravel()
+    luz_a, luz_d = antes[::4, ::4, 0].ravel(), despues[::4, ::4, 0].ravel()
     ganancia, desplazamiento = np.polyfit(luz_d, luz_a, 1)
     for _ in range(2):  # segunda pasada solo con los puntos que el primer ajuste dejó cerca
         cerca = np.abs(ganancia * luz_d + desplazamiento - luz_a) < 12
@@ -82,8 +119,8 @@ def _igualar_luz(antes: np.ndarray, despues: np.ndarray) -> np.ndarray:
 def puntajes_de_cambio(antes: np.ndarray, despues: np.ndarray) -> np.ndarray:
     """`(64,)` cuánto cambió cada casilla entre dos tableros en LAB (orden `NOMBRES`), ya descontado el cambio común de todo el tablero (luz)."""
     diferencia = np.abs(antes - _igualar_luz(antes, despues)).sum(axis=2)
-    desde, hasta = _ref.CENTRO
-    lado = _ref.CASILLA
+    desde, hasta = CENTRO
+    lado = CASILLA
     cambios = np.array([diferencia[f * lado + desde : f * lado + hasta, c * lado + desde : c * lado + hasta].mean() for f in range(8) for c in range(8)])
     return cambios - np.percentile(cambios, _ref.PERCENTIL_FONDO)
 
@@ -201,6 +238,39 @@ def explicar(fen: str, cambiadas: frozenset[str], tolerancia: float = TOLERANCIA
     return explicacion
 
 
+def explicar_por_evidencia(fen: str, puntajes: np.ndarray) -> Explicacion:
+    """La jugada legal cuyo origen y destino cambiaron MÁS que todo lo demás, aunque ningún cambio llegue a `CAMBIO_MINIMO` (poco contraste entre pieza y casilla).
+
+    No usa un umbral por casilla sino la comparación entre jugadas: se acepta la que tiene el origen y el destino por encima de `EVIDENCIA_MINIMA`, con el resto del tablero claramente más
+    quieto (`DOMINIO_EVIDENCIA`) y sin otra jugada distinta que le compita (`MARGEN_EVIDENCIA`). Siempre sale `aproximada` (hay que verla en cuadros seguidos).
+    """
+    tablero = chess.Board(fen)
+    indice = {nombre: i for i, nombre in enumerate(NOMBRES)}
+    evaluadas: list[tuple[float, float, chess.Move, frozenset[str]]] = []
+    for jugada in tablero.legal_moves:
+        casillas = casillas_de_la_jugada(tablero, jugada)
+        principales = (chess.square_name(jugada.from_square), chess.square_name(jugada.to_square))
+        evidencia = min(float(puntajes[indice[n]]) for n in principales)
+        resto = max((float(puntajes[i]) for n, i in indice.items() if n not in casillas), default=0.0)
+        secundarias = [float(puntajes[indice[n]]) for n in casillas if n not in principales]
+        if secundarias and min(secundarias) < EVIDENCIA_MINIMA / 2:  # enroque o al paso: la torre o el peón también tienen que haberse movido
+            continue
+        evaluadas.append((evidencia, resto, jugada, casillas))
+    if not evaluadas:
+        return Explicacion(None)
+    evaluadas.sort(key=lambda e: (-e[0], e[2].promotion not in (None, chess.QUEEN)))
+    evidencia, resto, jugada, casillas = evaluadas[0]
+    if evidencia < EVIDENCIA_MINIMA or resto > DOMINIO_EVIDENCIA * evidencia:
+        return Explicacion(None)
+    for otra, _, _, otras_casillas in evaluadas[1:]:
+        if otra <= MARGEN_EVIDENCIA * evidencia:
+            break
+        if otras_casillas != casillas:
+            return Explicacion(None, ambigua=True, nota="Más de una jugada encaja con lo que cambió (poco contraste).")
+    nota = "Corona: se toma la dama. " if jugada.promotion == chess.QUEEN else ""
+    return Explicacion(jugada, tablero.san(jugada), aproximada=True, nota=nota + "Poco contraste entre la pieza y la casilla: se confirma en cuadros seguidos.", legales=len(evaluadas))
+
+
 def _describir_cambio(tablero: chess.Board, casillas: frozenset[str]) -> str:
     """Qué debería haber en cada casilla que cambió, para decirle a quien mueve qué devolver: «e2 (debería haber un peón blanco)»."""
     partes = []
@@ -221,6 +291,12 @@ class Seguimiento:
     esquinas: np.ndarray
     fen: str = chess.STARTING_FEN
     ticks_estable: int = TICKS_ESTABLE
+    ticks_confirmar: int = TICKS_CONFIRMAR
+    ticks_parcial: int = TICKS_PARCIAL
+    ticks_invalida: int = TICKS_INVALIDA
+    ticks_base: int = TICKS_BASE
+    ticks_sucia: int = TICKS_SUCIA
+    ticks_ajuste: int = TICKS_AJUSTE
     cambio_minimo: float = CAMBIO_MINIMO
     base: np.ndarray | None = field(default=None, repr=False)
     base_img: np.ndarray | None = field(default=None, repr=False)
@@ -232,6 +308,9 @@ class Seguimiento:
     """(FEN antes, SAN) de cada jugada detectada: para deshacer la última."""
     ultima_alerta: str = ""
     parciales: int = 0
+    sin_explicar: int = 0
+    ajuste_restante: int = 0
+    casillas_ajuste: frozenset = frozenset()
     pendiente: str | None = None
     confirmaciones: int = 0
     analisis: dict | None = field(default=None, repr=False)
@@ -266,7 +345,7 @@ class Seguimiento:
 
     def _reiniciar_base(self) -> None:
         self.base = self.base_img = None
-        self.estables = self.parciales = self.confirmaciones = 0
+        self.estables = self.parciales = self.confirmaciones = self.sin_explicar = self.ajuste_restante = 0
         self.pendiente = None
         self.estado = "tomando_base"
         self.ultima_alerta = ""
@@ -285,13 +364,13 @@ class Seguimiento:
         self.anterior = lab
         p_base = puntajes_de_cambio(self.base, lab) if self.base is not None else None
         if entre_cuadros:  # algo se mueve (mano, pieza): se espera
-            self.estables = self.parciales = self.confirmaciones = 0
+            self.estables = self.parciales = self.confirmaciones = self.sin_explicar = 0
             self.pendiente, self.congelado = None, False
             self._guardar_analisis(enderezada, p_base, frozenset(), entre_cuadros)
             return self._respuesta("moviendo", "Hay movimiento en el tablero: esperando que quede quieto…", entre_cuadros)
         self.estables += 1
         if self.base is None:
-            if self.estables < self.ticks_estable:
+            if self.estables < self.ticks_base:
                 return self._respuesta("tomando_base", "Esperando que el tablero esté quieto para tomar la foto base…", frozenset(), vista=False)
             self.base, self.base_img = lab, enderezada
             self._guardar_analisis(enderezada, None, frozenset(), frozenset())
@@ -299,18 +378,27 @@ class Seguimiento:
         if self.estables < self.ticks_estable:
             self._guardar_analisis(enderezada, p_base, _casillas_desde(p_base, self.cambio_minimo), frozenset())
             return self._respuesta("moviendo", "Confirmando que el tablero quedó quieto…", frozenset())
+        self.ajuste_restante = max(0, self.ajuste_restante - 1)
         cambiadas = _casillas_desde(p_base, self.cambio_minimo)
+        explicacion = explicar(self.fen, cambiadas, puntajes=p_base) if cambiadas else Explicacion(None)
+        if explicacion.jugada is None and not explicacion.ambigua:
+            # Con poco contraste ninguna casilla pasa el umbral (o pasan unas pocas sueltas): se busca la jugada cuyo origen y destino destacan del resto.
+            evidencia = explicar_por_evidencia(self.fen, p_base)
+            if evidencia.jugada is not None or evidencia.ambigua:
+                explicacion = evidencia
+                if evidencia.jugada is not None:
+                    cambiadas = casillas_de_la_jugada(chess.Board(self.fen), evidencia.jugada)
         if not cambiadas:
             restaurada = self.estado in ("invalida", "incompleta", "dudosa")
-            self.parciales = self.confirmaciones = 0
+            self.parciales = self.confirmaciones = self.sin_explicar = 0
             self.pendiente = None
             self.ultima_alerta = ""
             if not self.congelado:
                 self._guardar_analisis(enderezada, p_base, cambiadas, frozenset())
-            self.base, self.base_img = lab, enderezada  # la base sigue a la luz que cambia despacio
+            if float(p_base.max()) < EVIDENCIA_MINIMA:  # la base sigue a la luz que cambia despacio, pero nunca absorbe un cambio que podría ser una jugada
+                self.base, self.base_img = lab, enderezada
             mensaje = "Las piezas volvieron a su sitio. Esperando la próxima jugada." if restaurada else "Sin cambios. Esperando la próxima jugada."
             return self._respuesta("esperando", mensaje, cambiadas, vista=not self.congelado)
-        explicacion = explicar(self.fen, cambiadas, puntajes=p_base)
         flecha = (explicacion.jugada.from_square, explicacion.jugada.to_square) if explicacion.jugada else None
         self._guardar_analisis(enderezada, p_base, cambiadas, frozenset(), explicacion, flecha)
         tablero = chess.Board(self.fen)
@@ -319,17 +407,32 @@ class Seguimiento:
                 clave = explicacion.jugada.uci()
                 self.confirmaciones = self.confirmaciones + 1 if self.pendiente == clave else 1
                 self.pendiente = clave
-                if self.confirmaciones < TICKS_CONFIRMAR:
+                if self.confirmaciones < self.ticks_confirmar:
                     return self._respuesta("moviendo", f"Parece {explicacion.san}: confirmando que no sea un error de la imagen…", cambiadas)
             return self._aceptar(tablero, explicacion, cambiadas, lab, enderezada)
         self.pendiente, self.confirmaciones = None, 0
+        if self.ajuste_restante > 0 and cambiadas <= self.casillas_ajuste:
+            # Recién aceptada una jugada: lo que cambia en SUS casillas es la mano que suelta la pieza o la pieza que se acomoda, no una jugada nueva.
+            self.base, self.base_img = lab, enderezada
+            self.sin_explicar = self.parciales = 0
+            return self._respuesta("esperando", "Ajuste de la pieza. Esperando la próxima jugada.", frozenset(), vista=False)
         if explicacion.ambigua:
+            self.sin_explicar += 1
+            if self.sin_explicar < self.ticks_invalida:
+                return self._respuesta("moviendo", "Hay cambios en el tablero: esperando que termine el movimiento…", cambiadas)
             return self._respuesta("dudosa", f"Cambiaron {', '.join(sorted(cambiadas))} y más de una jugada encaja: sacá la mano y esperá, o revisá las piezas.", cambiadas)
         if explicacion.parcial:
             self.parciales += 1
-            if self.parciales < TICKS_PARCIAL:
+            if self.parciales < self.ticks_parcial:
                 lo_que_falta = ", ".join(sorted(explicacion.faltan))
                 return self._respuesta("incompleta", f"Jugada a medias: cambió {', '.join(sorted(cambiadas))} y falta mover algo en {lo_que_falta}. Esperando que la completes…", cambiadas)
+        self.sin_explicar += 1
+        if self.sin_explicar < self.ticks_invalida:  # una mano que se queda un momento sobre el tablero no es una alerta
+            return self._respuesta("moviendo", "Hay cambios en el tablero: esperando que termine el movimiento…", cambiadas)
+        if len(cambiadas) >= 5 and self.sin_explicar >= self.ticks_sucia:
+            # Cinco casillas o más sin explicación durante varios segundos con el tablero quieto: no es una jugada, es una mano (o la luz) que quedó en la foto base.
+            self._reiniciar_base()
+            return self._respuesta("tomando_base", "La foto base parecía tener algo encima (la mano): se vuelve a tomar cuando el tablero esté quieto.", frozenset(), vista=False)
         quien = _bando(tablero)
         lado_contrario = self._explica_el_otro_bando(tablero, cambiadas, p_base)
         self.ultima_alerta = (
@@ -352,13 +455,15 @@ class Seguimiento:
     def _aceptar(self, tablero: chess.Board, explicacion: Explicacion, cambiadas: frozenset[str], lab: np.ndarray, enderezada: np.ndarray) -> dict:
         quien = _bando(tablero)
         self.historial.append((self.fen, explicacion.san))
+        casillas_jugada = casillas_de_la_jugada(tablero, explicacion.jugada)  # antes de jugarla: el enroque y la captura al paso dependen de la posición
         tablero.push(explicacion.jugada)
         self.fen = tablero.fen()
         self.jugadas.append(explicacion.san)
         self.base, self.base_img = lab, enderezada
         self.ultima_alerta = ""
-        self.parciales = self.confirmaciones = 0
+        self.parciales = self.confirmaciones = self.sin_explicar = 0
         self.pendiente, self.congelado = None, True
+        self.ajuste_restante, self.casillas_ajuste = self.ticks_ajuste, casillas_jugada
         aviso = " (casilla dudosa tolerada)" if explicacion.aproximada else ""
         return self._respuesta("jugada", f"Jugada de las {quien}: {explicacion.san}{aviso}. {explicacion.nota}".strip(), cambiadas, explicacion.san)
 

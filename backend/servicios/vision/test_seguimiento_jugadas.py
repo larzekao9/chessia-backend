@@ -48,8 +48,8 @@ def test_coronacion_toma_la_dama() -> None:
 
 
 # --- máquina de estados con imágenes ---------------------------------------------------------------------------------------------------
-def _frame(fen: str, mano: bool = False, semilla: int = 0) -> np.ndarray:
-    """Foto sintética del tablero con las piezas de `fen` (discos blancos y negros), vista con las esquinas `ESQ`."""
+def _frame(fen: str, mano: bool = False, semilla: int = 0, blanca: tuple = (235, 235, 235), negra: tuple = (25, 25, 25)) -> np.ndarray:
+    """Foto sintética del tablero con las piezas de `fen` (discos de color `blanca` y `negra`), vista con las esquinas `ESQ`."""
     plano = np.zeros((rv.LADO, rv.LADO, 3), np.uint8)
     for fila in range(8):
         for columna in range(8):
@@ -57,7 +57,7 @@ def _frame(fen: str, mano: bool = False, semilla: int = 0) -> np.ndarray:
             cv2.rectangle(plano, (columna * 100, fila * 100), (columna * 100 + 99, fila * 100 + 99), color, -1)
     for casilla, pieza in chess.Board(fen).piece_map().items():
         centro = (chess.square_file(casilla) * 100 + 50, (7 - chess.square_rank(casilla)) * 100 + 50)
-        cv2.circle(plano, centro, 30, (235, 235, 235) if pieza.color == chess.WHITE else (25, 25, 25), -1)
+        cv2.circle(plano, centro, 30, blanca if pieza.color == chess.WHITE else negra, -1)
     if mano:  # una mano grande tapando varias casillas
         cv2.rectangle(plano, (150, 250), (520, 560), (110, 140, 180), -1)
     destino = np.array([[0, 0], [rv.LADO - 1, 0], [rv.LADO - 1, rv.LADO - 1], [0, rv.LADO - 1]], np.float32)
@@ -107,7 +107,8 @@ def test_una_jugada_ilegal_da_alerta_y_se_recupera_al_dejar_la_pieza() -> None:
     inicio = chess.STARTING_FEN
     ilegal = chess.Board(inicio); ilegal.set_piece_at(chess.E2, None); ilegal.set_piece_at(chess.E5, chess.Piece(chess.PAWN, chess.WHITE))  # peón e2→e5
     _correr(seg, [_frame(inicio, semilla=1), _frame(inicio, semilla=2), _frame(inicio, semilla=3)])
-    res = _correr(seg, [_frame(ilegal.fen(), mano=True, semilla=4), _frame(ilegal.fen(), semilla=5), _frame(ilegal.fen(), semilla=6), _frame(ilegal.fen(), semilla=7)])
+    res = _correr(seg, [_frame(ilegal.fen(), mano=True, semilla=4), _frame(ilegal.fen(), semilla=5), _frame(ilegal.fen(), semilla=6), _frame(ilegal.fen(), semilla=7), _frame(ilegal.fen(), semilla=8)])
+    assert res[-2]["estado"] == "moviendo"  # el primer cuadro con el cambio sin explicar todavía no es una alerta: puede ser una mano que se queda un momento
     assert res[-1]["estado"] == "invalida" and "e2" in res[-1]["cambiadas"] and "e5" in res[-1]["cambiadas"]
     assert seg.jugadas == [] and seg.fen == inicio
     res = _correr(seg, [_frame(inicio, mano=True, semilla=8), _frame(inicio, semilla=9), _frame(inicio, semilla=10), _frame(inicio, semilla=11), _frame(inicio, semilla=12)])
@@ -214,7 +215,7 @@ def test_la_base_sigue_a_un_cambio_de_luz_lento() -> None:
     for paso in range(1, 6):  # la luz sube de a poco: cada paso, quieto, sin que parezca una jugada
         mas_claro = [np.clip(_frame(inicio, semilla=paso * 10 + i).astype(np.int16) * (1 + 0.04 * paso) + 3 * paso, 0, 255).astype(np.uint8) for i in range(3)]
         res = _correr(seg, mas_claro)
-        assert res[-1]["estado"] == "esperando"
+        assert res[-1]["estado"] in ("esperando", "invalida")  # según cuánto cambie: o no ve nada, o avisa de posición inválida; nunca acepta una jugada
     assert seg.jugadas == []
 
 
@@ -251,3 +252,104 @@ def test_explicar_pide_origen_y_destino() -> None:
     parcial = sj.explicar(chess.STARTING_FEN, frozenset({"e2"}))
     assert parcial.jugada is None and parcial.parcial and parcial.faltan == {"e3", "e4"}
     assert sj.explicar(chess.STARTING_FEN, frozenset({"e2", "e4"}), puntajes=None).aproximada is False
+
+
+# --- poco contraste: una pieza clara sobre una casilla clara casi no cambia la imagen ------------------------------------------------------
+POCO_CONTRASTE = {"blanca": (165, 205, 235), "negra": (50, 80, 110)}  # con esto e2 y e4 cambian ~10: por debajo de CAMBIO_MINIMO (15)
+
+
+def _flojo(fen: str, mano: bool = False, semilla: int = 0) -> np.ndarray:
+    return _frame(fen, mano=mano, semilla=semilla, **POCO_CONTRASTE)
+
+
+def test_con_poco_contraste_ninguna_casilla_pasa_el_umbral_pero_la_jugada_se_detecta() -> None:
+    inicio, tras = chess.STARTING_FEN, _posicion_tras("e2e4")
+    antes, despues = sj._a_lab(_flojo(inicio, semilla=1), ESQ), sj._a_lab(_flojo(tras, semilla=2), ESQ)
+    assert sj.casillas_cambiadas(antes, despues) == frozenset()  # el método de umbral no ve nada
+    assert sj.explicar_por_evidencia(inicio, sj.puntajes_de_cambio(antes, despues)).san == "e4"
+    seg = sj.Seguimiento(ESQ)
+    _correr(seg, [_flojo(inicio, semilla=s) for s in (1, 2, 3)])
+    res = _correr(seg, [_flojo(tras, mano=True, semilla=10)] + [_flojo(tras, semilla=11 + i) for i in range(6)])
+    assert seg.jugadas == ["e4"] and any(r["estado"] == "jugada" for r in res)
+
+
+def test_un_cambio_flojo_que_no_es_una_jugada_no_se_cuela_ni_se_traga_la_base() -> None:
+    inicio = chess.STARTING_FEN
+    seg = sj.Seguimiento(ESQ)
+    _correr(seg, [_flojo(inicio, semilla=s) for s in (1, 2, 3)])
+    base = seg.base
+    ilegal = chess.Board(inicio); ilegal.set_piece_at(chess.E2, None); ilegal.set_piece_at(chess.E5, chess.Piece(chess.PAWN, chess.WHITE))
+    res = _correr(seg, [_flojo(ilegal.fen(), mano=True, semilla=10)] + [_flojo(ilegal.fen(), semilla=11 + i) for i in range(6)])
+    assert seg.jugadas == [] and seg.base is base  # no inventa una jugada y la foto base sigue siendo la de antes (la jugada no se «absorbe»)
+    assert res[-1]["estado"] in ("esperando", "invalida")  # según cuánto cambie: o no ve nada, o avisa de posición inválida; nunca acepta una jugada
+
+
+def test_el_ruido_con_el_tablero_quieto_no_inventa_jugadas() -> None:
+    inicio = chess.STARTING_FEN
+    seg = sj.Seguimiento(ESQ)
+    res = _correr(seg, [_flojo(inicio, semilla=s) for s in range(1, 25)])
+    assert seg.jugadas == [] and all(r["estado"] in ("tomando_base", "moviendo", "esperando") for r in res)
+    assert seg.fen == inicio
+
+
+def test_con_poco_contraste_dos_jugadas_seguidas_de_cada_bando() -> None:
+    seg = sj.Seguimiento(ESQ)
+    posiciones = [chess.STARTING_FEN, _posicion_tras("e2e4"), _posicion_tras("e2e4", "e7e5")]
+    _correr(seg, [_flojo(posiciones[0], semilla=s) for s in (1, 2, 3)])
+    for i, fen in enumerate(posiciones[1:], start=1):
+        _correr(seg, [_flojo(fen, mano=True, semilla=100 * i)] + [_flojo(fen, semilla=100 * i + k) for k in range(1, 7)])
+    assert seg.jugadas == ["e4", "e5"]
+
+
+# --- ritmo: mirar el tablero muchas veces por segundo -----------------------------------------------------------------------------------------
+def test_los_cuadros_quietos_se_ajustan_al_ritmo_con_que_se_mira() -> None:
+    siempre = sj.ticks_para(1.0)
+    assert siempre == {"ticks_estable": 2, "ticks_confirmar": 2, "ticks_invalida": 2, "ticks_base": 2, "ticks_sucia": 4, "ticks_ajuste": 3, "ticks_parcial": 6}  # el ritmo de siempre
+    camara = sj.ticks_para(1 / 30)  # un cuadro de la cámara
+    assert camara["ticks_estable"] == 4 and camara["ticks_base"] == 30  # 0,15 s quieto para una jugada; 1 s para la foto base
+    assert camara["ticks_invalida"] == 45 and camara["ticks_sucia"] == 120 and camara["ticks_parcial"] == 180
+    assert sj.ticks_para(0.0)["ticks_estable"] >= 2
+
+
+def test_a_diez_cuadros_por_segundo_la_jugada_se_reconoce_a_los_pocos_cuadros_de_quedar_quieto() -> None:
+    inicio, tras = chess.STARTING_FEN, _posicion_tras("e2e4")
+    seg = sj.Seguimiento(ESQ, **sj.ticks_para(0.1))
+    _correr(seg, [_frame(inicio, semilla=s) for s in range(1, 14)])  # la foto base tarda 1 s (10 cuadros)
+    assert seg.base is not None
+    res = _correr(seg, [_frame(tras, mano=True, semilla=50)] + [_frame(tras, semilla=51 + i) for i in range(8)])
+    detectado = next(i for i, r in enumerate(res) if r["estado"] == "jugada")
+    assert seg.jugadas == ["e4"] and detectado <= 6  # una vez quieto, unos pocos cuadros más (0,2 s a este ritmo)
+
+
+def test_la_foto_base_no_se_toma_con_la_mano_apenas_quieta() -> None:
+    """Una mano que se queda un momento sobre el tablero no puede quedar en la foto base: se espera 1 s de quietud (no los 0,15 s de una jugada)."""
+    inicio = chess.STARTING_FEN
+    seg = sj.Seguimiento(ESQ, **sj.ticks_para(1 / 30))
+    _correr(seg, [_frame(inicio, mano=True, semilla=s) for s in range(1, 13)])  # la mano se queda quieta 12 cuadros (0,4 s)
+    assert seg.base is None
+    _correr(seg, [_frame(inicio, semilla=100 + s) for s in range(40)])
+    assert seg.base is not None and seg.estado == "esperando"
+
+
+def test_si_la_foto_base_quedo_con_la_mano_encima_se_vuelve_a_tomar_sola() -> None:
+    inicio, tras = chess.STARTING_FEN, _posicion_tras("e2e4")
+    seg = sj.Seguimiento(ESQ)  # ritmo de un cuadro por segundo
+    _correr(seg, [_frame(inicio, mano=True, semilla=s) for s in (1, 2, 3)])  # base con la mano
+    assert seg.base is not None
+    res = _correr(seg, [_frame(inicio, semilla=10 + s) for s in range(12)])  # la mano se va: muchas casillas «cambiadas» que ninguna jugada explica
+    assert any(r["estado"] == "tomando_base" and "mano" in r["mensaje"] for r in res)
+    _correr(seg, [_frame(inicio, semilla=40 + s) for s in range(4)])  # base limpia
+    _correr(seg, [_frame(tras, mano=True, semilla=60)] + [_frame(tras, semilla=61 + i) for i in range(5)])
+    assert seg.jugadas == ["e4"]
+
+
+def test_lo_que_cambia_en_las_casillas_de_la_jugada_recien_hecha_se_absorbe() -> None:
+    """La mano que suelta la pieza o la pieza que se acomoda justo después de la jugada no es una alerta: la base se corrige y sigue."""
+    inicio, tras = chess.STARTING_FEN, _posicion_tras("e2e4")
+    seg = sj.Seguimiento(ESQ)
+    _correr(seg, [_frame(inicio, semilla=s) for s in (1, 2, 3)])
+    _correr(seg, [_frame(tras, mano=True, semilla=10)] + [_frame(tras, semilla=11 + i) for i in range(3)])
+    assert seg.jugadas == ["e4"]
+    ajustada = chess.Board(tras); ajustada.remove_piece_at(chess.E4)  # la pieza se levanta un momento para acomodarla
+    res = _correr(seg, [_frame(ajustada.fen(), semilla=30 + i) for i in range(3)])
+    assert all(r["estado"] != "invalida" for r in res) and seg.jugadas == ["e4"]
