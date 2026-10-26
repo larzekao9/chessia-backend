@@ -17,6 +17,7 @@ from .servicio_auth import (
     autenticar_o_vincular_google,
     verificar_token_google,
 )
+from . import servicio_totp  # noqa: F401  (se importa como `from backend.servicios.auth import servicio_totp`)
 
 __all__ = [
     "actualizar_nivel_estimado",

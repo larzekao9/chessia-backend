@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from backend.repositorios.repositorio_partida import RepositorioPartidas
+from backend.servicios.sala import presencia_sala
 
 MINUTOS_SALA_VACIA = 30
 """Una sala `esperando` sin segundo jugador se elimina si pasó este tiempo."""
@@ -37,18 +38,21 @@ def limpiar_salas_inactivas(repositorio: RepositorioPartidas | None = None) -> N
 
     repo = repositorio or servicio_sala._repositorio
     ahora = datetime.now(timezone.utc)
-    for partida in repo.listar():
-        if partida.tipo_oponente != "humano":
-            continue
+    for partida in repo.listar_salas_abiertas():
         if partida.estado == "esperando":
             ref = servicio_sala._a_datetime_utc(partida.creada_en)
             if ahora - ref > timedelta(minutes=MINUTOS_SALA_VACIA):
                 repo.eliminar(partida.id)
+                presencia_sala.olvidar_sala(partida.id)
         elif partida.estado == "en_curso":
+            # Con reloj: si a alguien se le acabó el tiempo o se fue (nadie consulta la sala), se cierra acá.
+            if partida.control_tiempo_ms and servicio_sala.revisar_reloj_y_ausencia(partida.codigo_sala).estado != "en_curso":
+                continue
             if not partida.tablero.move_stack:
                 ref = servicio_sala._a_datetime_utc(partida.creada_en)
                 if ahora - ref > timedelta(minutes=MINUTOS_SALA_SIN_JUGADAS):
                     repo.eliminar(partida.id)
+                    presencia_sala.olvidar_sala(partida.id)
             else:
                 ref = servicio_sala._a_datetime_utc(partida.actualizada_en or partida.creada_en)
                 if ahora - ref > timedelta(hours=HORAS_SALA_INACTIVA):

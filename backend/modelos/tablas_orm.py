@@ -77,8 +77,31 @@ class UsuarioORM(Base):
     # verificar solo si el servidor tiene el envío de correo configurado, y se verifica con un código de 6 dígitos que vence a los
     # 15 minutos (solo se guarda su huella).
     correo_verificado: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    correo_verificado_en: Mapped[datetime | None] = mapped_column(nullable=True)
     codigo_verificacion_hash: Mapped[str | None] = mapped_column(nullable=True)
     codigo_verificacion_expira: Mapped[datetime | None] = mapped_column(nullable=True)
+    recuperacion_password_hash: Mapped[str | None] = mapped_column(nullable=True)
+    recuperacion_password_expira: Mapped[datetime | None] = mapped_column(nullable=True)
+    version_credenciales: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
+    # Verificación en dos pasos (TOTP) de los facilitadores. El secreto se guarda cifrado; los códigos de respaldo, como huellas.
+    totp_activo: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    totp_secreto: Mapped[str | None] = mapped_column(nullable=True)
+    totp_ultimo_paso: Mapped[int | None] = mapped_column(nullable=True)
+    totp_codigos_respaldo: Mapped[str | None] = mapped_column(nullable=True)
+    # Modo evaluación: un facilitador que prueba el sistema como director tiene además una cuenta de jugador de prueba, y cada una apunta a
+    # la otra. Sirve para pasar de una vista a la otra sin volver a iniciar sesión. Se borra al convertir la institución en cliente.
+    cuenta_vinculada_id: Mapped[int | None] = mapped_column(ForeignKey("usuario.id"), nullable=True)
+    # Código para que otro jugador le mande una solicitud de amistad sin saber su correo (se comparte por WhatsApp). Se genera la primera
+    # vez que se pide; sirve solo para mandar la solicitud: no muestra nada de quien lo tiene.
+    codigo_amigo: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    # Contacto de la madre, el padre o el tutor de un jugador menor de edad, para que su docente pueda avisarle si pasa algo. Solo lo ven el propio
+    # jugador, su docente, el administrador de su institución y la plataforma. `autorizacion_tutor_en` es cuándo se declaró que el tutor autorizó el uso.
+    tutor_nombre: Mapped[str | None] = mapped_column(nullable=True)
+    tutor_telefono: Mapped[str | None] = mapped_column(nullable=True)
+    tutor_email: Mapped[str | None] = mapped_column(nullable=True)
+    autorizacion_tutor_en: Mapped[datetime | None] = mapped_column(nullable=True)
+    # `True` en las cuentas que creó un docente para un alumno sin correo (entra con un usuario y una clave que el docente le entrega).
+    cuenta_gestionada: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
 
     partidas: Mapped[list["PartidaORM"]] = relationship(
         back_populates="usuario",
@@ -284,6 +307,12 @@ class CodigoInvitacionORM(Base):
     expira_en: Mapped[datetime] = mapped_column(nullable=False)
     usado_en: Mapped[datetime | None] = mapped_column(nullable=True)
     usado_por: Mapped[int | None] = mapped_column(ForeignKey("usuario.id"), nullable=True, index=True)
+    # Si el código es para una institución, quien se registra con él queda dentro de ella (como docente o, si `como_administrador`, como
+    # su administrador). Sin institución, solo da permiso para registrarse como facilitador.
+    institucion_id: Mapped[int | None] = mapped_column(ForeignKey("institucion.id"), nullable=True, index=True)
+    como_administrador: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    # `true` si es una invitación para evaluar el sistema: además de quedar como administrador, a quien se registre se le crea un jugador de prueba.
+    es_evaluacion: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
 
 
 class AuditoriaORM(Base):
@@ -323,6 +352,55 @@ class InstitucionORM(Base):
         ForeignKey("usuario.id", use_alter=True, name="fk_institucion_administrador"), nullable=True
     )
     creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
+    # `true` en las instituciones de ejemplo que carga la plataforma para mostrar el panel de ingresos: se pueden quitar todas juntas.
+    es_demostracion: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    # `true` mientras es una institución de prueba, creada para que una institución evalúe el sistema antes de contratarlo.
+    es_prueba: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    # Dominio del correo institucional (`colegio.edu.bo`). Si está definido, solo entran a los cursos de sus docentes los jugadores con un correo de ese dominio.
+    dominio_correo: Mapped[str | None] = mapped_column(nullable=True)
+
+
+PLANES_SUSCRIPCION = ("plan_60", "plan_120")
+"""Planes: hasta 60 alumnos (Bs 350 al mes) y hasta 120 alumnos (Bs 500 al mes). Docentes y cursos ilimitados."""
+
+CICLOS_SUSCRIPCION = ("mensual", "trimestral", "anual")
+ESTADOS_PAGO = ("pendiente", "confirmado", "rechazado")
+
+
+class SuscripcionORM(Base):
+    """La suscripción de una institución: su plan, hasta cuándo dura la prueba gratis y hasta cuándo está pagada. El estado (prueba,
+    activa o vencida) no se guarda: se calcula con estas dos fechas. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "suscripcion"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institucion_id: Mapped[int] = mapped_column(ForeignKey("institucion.id"), unique=True, nullable=False)
+    plan: Mapped[str] = mapped_column(nullable=False, default="plan_60", server_default="plan_60")
+    ciclo: Mapped[str] = mapped_column(nullable=False, default="mensual", server_default="mensual")
+    prueba_hasta: Mapped[datetime] = mapped_column(nullable=False)
+    vigente_hasta: Mapped[datetime | None] = mapped_column(nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class PagoORM(Base):
+    """Un pago que una institución avisa haber hecho (transferencia o QR). Queda `pendiente` hasta que la plataforma lo confirma, y recién
+    ahí se extiende la suscripción. `resuelto_por` no es clave foránea a propósito: el registro sobrevive a la cuenta de quien lo
+    confirmó. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "pago"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institucion_id: Mapped[int] = mapped_column(ForeignKey("institucion.id"), nullable=False, index=True)
+    plan: Mapped[str] = mapped_column(nullable=False)
+    ciclo: Mapped[str] = mapped_column(nullable=False)
+    monto_bs: Mapped[int] = mapped_column(nullable=False)
+    estado: Mapped[str] = mapped_column(nullable=False, default="pendiente", server_default="pendiente", index=True)
+    referencia: Mapped[str | None] = mapped_column(nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now(), index=True)
+    resuelto_en: Mapped[datetime | None] = mapped_column(nullable=True)
+    resuelto_por: Mapped[int | None] = mapped_column(nullable=True)
+    periodo_hasta: Mapped[datetime | None] = mapped_column(nullable=True)
+    nota: Mapped[str | None] = mapped_column(nullable=True)
 
 
 class CursoORM(Base):
@@ -340,6 +418,12 @@ class CursoORM(Base):
     cupo: Mapped[int] = mapped_column(default=60, server_default="60", nullable=False)
     # Tono de Turing para los jugadores de este curso ('infantil' | 'estandar' | 'adultos'); nulo = el del facilitador.
     preset_ensenanza: Mapped[str | None] = mapped_column(nullable=True)
+    # «Modo clase»: el docente puede pausar los retos, la búsqueda de rival y las salas entre alumnos de este curso mientras explica.
+    permite_retos: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    # El docente (o la institución) declara que tiene la autorización de las familias de los alumnos de este curso para que usen ChessIA. Con eso, los alumnos menores
+    # no necesitan cargar los datos de un tutor uno por uno para jugar con sus compañeros. `autorizacion_familias_en` es cuándo se declaró.
+    autorizacion_familias: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    autorizacion_familias_en: Mapped[datetime | None] = mapped_column(nullable=True)
     creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
@@ -386,4 +470,115 @@ class MedallaPersonalizadaORM(Base):
     meta: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     general: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
     creada_por: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    creada_en: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AmistadORM(Base):
+    """Una amistad entre dos jugadores. `solicitante_id` la pidió (por correo, por código de amigo o desde su curso) y `destinatario_id`
+    la acepta (`estado = "aceptada"`) o la rechaza (la fila se borra, así quien pidió no se entera). Los compañeros de curso no necesitan
+    amistad para jugar entre sí: esto es para los que no comparten curso. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "amistad"
+    __table_args__ = (UniqueConstraint("solicitante_id", "destinatario_id", name="uq_amistad_par"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    solicitante_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    destinatario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    estado: Mapped[str] = mapped_column(nullable=False, default="pendiente", server_default="pendiente")
+    creada_en: Mapped[datetime] = mapped_column(server_default=func.now())
+    respondida_en: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class DenunciaORM(Base):
+    """Una denuncia de un jugador contra otro (por su conducta, por hacer trampa o por abandonar partidas). La revisa el docente del denunciado, el administrador de su
+    institución o la plataforma, que la marca como revisada. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "denuncia"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    denunciante_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    denunciado_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    motivo: Mapped[str] = mapped_column(nullable=False)  # 'conducta' | 'trampa' | 'abandono' | 'otro'
+    detalle: Mapped[str | None] = mapped_column(nullable=True)
+    codigo_sala: Mapped[str | None] = mapped_column(nullable=True)
+    estado: Mapped[str] = mapped_column(nullable=False, default="nueva", server_default="nueva")  # 'nueva' | 'revisada'
+    creada_en: Mapped[datetime] = mapped_column(server_default=func.now())
+    resuelta_en: Mapped[datetime | None] = mapped_column(nullable=True)
+    resuelta_por: Mapped[int | None] = mapped_column(nullable=True)  # sin clave foránea: el registro sobrevive a la cuenta de quien lo resolvió
+
+
+class TorneoORM(Base):
+    """Un torneo relámpago de un curso (sistema suizo): los alumnos se inscriben, el docente arma cada ronda y el sistema empareja por puntos. Las partidas son salas
+    con el reloj elegido. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "torneo"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curso_id: Mapped[int] = mapped_column(ForeignKey("curso.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(nullable=False)
+    control_tiempo_ms: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    rondas: Mapped[int] = mapped_column(nullable=False, default=3, server_default="3")
+    ronda_actual: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
+    estado: Mapped[str] = mapped_column(nullable=False, default="inscripcion", server_default="inscripcion")  # 'inscripcion' | 'en_juego' | 'terminado'
+    creado_por: Mapped[int] = mapped_column(nullable=False)  # sin clave foránea: el torneo sobrevive a la cuenta de quien lo armó
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class TorneoJugadorORM(Base):
+    """Un jugador inscrito en un torneo, con sus puntos (1 por victoria, 0,5 por tablas, 1 por descanso). Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "torneo_jugador"
+    __table_args__ = (UniqueConstraint("torneo_id", "usuario_id", name="uq_torneo_jugador"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    torneo_id: Mapped[int] = mapped_column(ForeignKey("torneo.id"), nullable=False, index=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    puntos: Mapped[float] = mapped_column(nullable=False, default=0.0, server_default="0")
+    descansos: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")  # rondas en que le tocó descansar (número impar de jugadores)
+    inscrito_en: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class TorneoPartidaORM(Base):
+    """Una partida de una ronda de un torneo: quién juega con blancas y con negras (`negras_id` nulo = descanso del jugador de blancas), el código de su sala y cómo
+    terminó. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "torneo_partida"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    torneo_id: Mapped[int] = mapped_column(ForeignKey("torneo.id"), nullable=False, index=True)
+    ronda: Mapped[int] = mapped_column(nullable=False)
+    blancas_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    negras_id: Mapped[int | None] = mapped_column(ForeignKey("usuario.id"), nullable=True, index=True)
+    codigo_sala: Mapped[str | None] = mapped_column(nullable=True)
+    resultado: Mapped[str | None] = mapped_column(nullable=True)  # '1-0' | '0-1' | '1/2-1/2' | '0-0' (nadie se presentó); nulo mientras se juega
+
+
+class AvisoCursoORM(Base):
+    """Un aviso de un docente a su curso (una consigna, el enlace de una clase en vivo, una felicitación). Es en un solo sentido: los alumnos lo leen, no responden. Tabla
+    nueva: `create_all` la crea sola."""
+
+    __tablename__ = "aviso_curso"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curso_id: Mapped[int] = mapped_column(ForeignKey("curso.id"), nullable=False, index=True)
+    autor_id: Mapped[int] = mapped_column(nullable=False)  # sin clave foránea: el aviso sobrevive a la cuenta de quien lo escribió
+    texto: Mapped[str] = mapped_column(nullable=False)
+    enlace: Mapped[str | None] = mapped_column(nullable=True)
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class TareaCursoORM(Base):
+    """Una tarea de un docente para su curso, con una meta que el sistema mide solo con lo que los alumnos juegan (cuántas partidas, con quién, qué precisión). Tabla nueva:
+    `create_all` la crea sola."""
+
+    __tablename__ = "tarea_curso"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    curso_id: Mapped[int] = mapped_column(ForeignKey("curso.id"), nullable=False, index=True)
+    autor_id: Mapped[int] = mapped_column(nullable=False)  # sin clave foránea: la tarea sobrevive a la cuenta de quien la puso
+    titulo: Mapped[str] = mapped_column(nullable=False)
+    tipo: Mapped[str] = mapped_column(nullable=False)  # 'partidas_ia' | 'partidas_amigos' | 'precision'
+    meta: Mapped[int] = mapped_column(nullable=False)
+    desde: Mapped[datetime] = mapped_column(nullable=False)
+    hasta: Mapped[datetime] = mapped_column(nullable=False)
     creada_en: Mapped[datetime] = mapped_column(server_default=func.now())

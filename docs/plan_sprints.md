@@ -834,6 +834,158 @@ Antes de la suscripción se separaron los permisos. Hay cuatro perfiles; el back
 
 ---
 
+## Suscripción por institución (Paso 1 del modelo de negocio, Hebert)
+
+Cada institución paga una suscripción según cuántos alumnos tiene; los docentes y los cursos son ilimitados. Los precios y los costos de
+referencia son los **supuestos de diseño** del plan de emprendimiento (CANVAS, tablas 13, 16 y 18) y se validan con la prueba piloto de 8
+semanas y la encuesta a instituciones: no son datos medidos.
+
+| Plan | Tope | Mensual | Trimestral (10 % menos) | Anual (paga 10 de 12 meses) |
+|---|---|---|---|---|
+| `plan_60` | 60 alumnos | Bs 350 | Bs 945 | Bs 3.500 |
+| `plan_120` | 120 alumnos | Bs 500 | Bs 1.350 | Bs 5.000 |
+
+- **Prueba gratis de 30 días por defecto** al crear la institución; se puede elegir otro plazo (7, 15, 30, 60 o 90 días). El CANVAS habla de un
+  «piloto gratuito de dos meses»: son los 60 días, que se eligen al dar de alta el piloto formal. El estado (`prueba`, `activa`,
+  `vencida`) se calcula con dos fechas: no hay tareas programadas.
+- **Tope al inscribir:** un alumno que entra con el código de un curso cuenta contra el plan de la institución de su docente. Con el
+  plan lleno o la suscripción vencida no entran alumnos nuevos; los que ya estaban siguen jugando. Los cursos de docentes sin institución
+  no tienen tope.
+- **Pago manual:** la institución elige plan y ciclo, ve un QR de DEMOSTRACIÓN (no es un pago real) y avisa que pagó; el pago queda
+  `pendiente` hasta que la plataforma lo confirma, y recién ahí se extiende la suscripción. **El período pagado empieza cuando termina lo que
+  ya estaba cubierto** (la prueba gratis que quede o el período pagado vigente): quien paga antes de tiempo no pierde ni un día. Una institución
+  que ya pagó al darse de alta no lleva prueba (el período pagado empieza ese día). Tablas nuevas `suscripcion` y `pago`; columna `institucion.es_demostracion`.
+- **Pantallas:** «Mi suscripción» (administrador de la institución) e «Ingresos» (plataforma: pagos por confirmar, cobrado por mes, instituciones
+  por estado y punto de equilibrio con los costos del CANVAS editables). «Cargar datos de demostración» crea cinco instituciones de ejemplo,
+  marcadas «(demostración)», que se muestran aparte de lo real y se quitan todas juntas.
+- **Punto de equilibrio con los valores del CANVAS:** costos fijos de Bs 830 al mes (infraestructura en la nube Bs 351): se cubren con 3
+  suscripciones; con los descuentos anuales (Bs 292 por mes) sigue dando 3.
+- **Aviso de vencimiento** (`componentes/AvisoSuscripcion.jsx`): al director le aparece una franja cuando le quedan 7 días o menos (de prueba o de período
+  pagado), cuando la suscripción venció o cuando su pago espera confirmación; con botón a «Mi suscripción». No se muestra a instituciones en
+  evaluación ni de demostración. A la plataforma, «Ingresos» lleva un punto en el menú cuando hay pagos por confirmar.
+- **Calculadora para presupuestar** (en «Ingresos»): se escribe cuántos alumnos tiene la institución y muestra el plan, lo que paga por ciclo,
+  lo que sale por alumno al mes y lo que ahorra pagando por adelantado.
+- **Falta (fuera de alcance):** cobro automático, facturación, y torneos y exhibiciones como producto. El CANVAS dice que el pago es solo
+  mensual: hay que actualizarlo con el trimestral y el anual.
+
+---
+
+### Alta de instituciones, invitaciones y modo evaluación
+
+- **Alta de una vez:** al crear una institución se define el plan, los días de prueba (o si ya pagó, y por qué ciclo) y cómo llega su director: con
+  un **enlace de invitación** (`/#invitacion=CÓDIGO`, que se manda por WhatsApp), eligiendo una cuenta que ya existe o más tarde. El código va en
+  el fragmento de la dirección: no llega al servidor ni a sus registros, y la pantalla de ingreso lo lee y lo borra de la barra.
+- **Invitaciones por institución:** un código puede ir ligado a una institución, y quien se registra con él queda dentro de ella (docente, o
+  administrador si la institución todavía no tiene uno). Los códigos de una institución valen hasta 7 días; los demás, 24 horas. El
+  **director invita a sus propios docentes** desde «Mi institución» (solo a su institución y solo como docentes); la plataforma, a cualquiera.
+- **Modo evaluación («invitar a probar»):** se crea una institución de prueba (`institucion.es_prueba`) y un código de evaluación. Quien se
+  registra queda como su director y, además, se le crea un **jugador de prueba vinculado** (`usuario.cuenta_vinculada_id`, sin contraseña, con un
+  correo `.invalid` que nunca existe). El botón **«Ver como jugador» / «Volver a mi panel»** (`POST /auth/cambiar-vista`) cambia la sesión guardada
+  por la de la otra cuenta, sin volver a iniciar sesión. Si la otra cuenta tiene verificación en dos pasos, no se salta: hay que iniciar sesión.
+  La institución de prueba no obliga al doble factor (`DOBLE_FACTOR_OBLIGATORIO`) hasta que es cliente.
+- **Convertir en cliente** (`POST /instituciones/{id}/convertir`): cuando cierran el trato, la institución deja de ser de prueba, se corrige su
+  nombre, plan y pago, se borra el jugador de prueba (y con él el botón) y su director conserva todo lo que armó. Si se borra la cuenta del
+  director, también se borra su jugador de prueba.
+- **Pago recibido en persona** (`POST /suscripciones/{id}/pago-registrado`): la plataforma anota un pago de efectivo o transferencia y la
+  suscripción queda activa sin que la institución tenga que avisarlo. «Gestionar» en Ingresos también suma días de prueba.
+
+---
+
+### Resultados que se pueden mostrar: progreso, antes y después, QR y confianza
+
+Lo que una institución (y la defensa) necesita ver para creer que el sistema enseña, con datos que ya se guardaban (calibraciones, partidas, medallas).
+
+- **Antes y después** (`backend/servicios/curso/servicio_progreso.py`): el «antes» es el promedio de las 3 primeras partidas medidas de un alumno (su
+  diagnóstico); el «después», el de las últimas 3 posteriores. Nunca se solapan; con menos de una partida posterior no hay comparación y, mientras
+  haya menos de 3, se marca provisional. Un cambio menor a 2 puntos de precisión se considera ruido (`estable`). Hay `comparar()` (un alumno) y
+  `progreso_de_grupo()` (curso o institución: cuántos mejoraron, mejora promedio, nivel y precisión antes y después, actividad). El porcentaje de
+  los que mejoraron se calcula solo sobre quienes ya se pueden comparar.
+- **Informe por alumno** (`GET /progreso/alumnos/{id}`, `/progreso/mio`): antes y después, evolución partida a partida, constancia, resultados, precisión
+  por fase, errores más repetidos, medallas y frases de lectura armadas con reglas fijas (sin modelo de lenguaje). Lo ve el propio jugador, su
+  docente, el administrador de su institución y la plataforma. **No tiene enlace público**: lleva el nombre completo de un menor; se entrega
+  impreso (la hoja se imprime o se guarda como PDF desde el navegador) o con un resumen por WhatsApp.
+- **Por curso e institución** (`/progreso/cursos/{id}`, `/progreso/institucion`): se ven en «Reporte del curso» y en «Mi institución».
+- **Salud de los clientes** (`GET /progreso/instituciones`, solo plataforma, en «Ingresos»): por institución, alumnos que juegan y que mejoran, y un aviso
+  «Llamar» cuando nadie jugó en 14 días, no entró ningún alumno en una semana, o menos de un cuarto jugó en el mes.
+- **QR de curso:** el botón «QR» de cada curso muestra un código QR del enlace `/#curso=CÓDIGO` (copiar, WhatsApp, bajar imagen, imprimir cartel). Al
+  abrirlo, el código se guarda en la pestaña (el `#` no llega al servidor), el alumno crea su cuenta o inicia sesión y queda inscrito.
+- **Confianza y Turing** (`/#confianza`, pública, y en el menú de los docentes): el entorno cerrado (doce controles que el sistema cumple de verdad) y
+  la ficha medida de Turing (acierto por versión, Elo 1355 de la red sola y 1808 con búsqueda con sus intervalos, lo que se probó y se descartó,
+  límites y cómo reproducirlo). Las cifras salen de `docs/turing_hoja_de_ruta.md`: si se mide una versión nueva, se actualiza el archivo
+  `paginas/Confianza/Confianza.jsx`.
+- **Quedó fuera (decisión de alcance, no de capricho):** ligas y torneos entre colegios; un rival que se adapta para ganar el 50 % de las partidas
+  (toca la Sala de Control y la app móvil, y es riesgoso a días de la defensa); cuentas creadas por el docente para niños sin correo (cambia la
+  autenticación); importación de alumnos por CSV; informe mensual automático (necesita el correo del servidor); PDF generado en el servidor
+  (el del navegador alcanza); cobro automático.
+
+---
+
+### Partidas entre personas: retos, amigos y rival de nivel parecido
+
+Antes de esto había salas humano vs humano solo en el backend (código de 6 letras, sin reloj, sin pantalla). Ahora es una función completa, para que los
+alumnos de un curso compitan entre sí y lo hagan de forma justa y segura.
+
+- **Sala con reloj del servidor** (`servicio_sala.py`): se crea sin reloj o con 3, 5, 10 o 15 minutos por lado. El reloj lo lleva el servidor (cada lado guarda
+  lo que le quedaba y el que tiene el turno gasta desde la última jugada); como en Lichess, **arranca cuando cada jugador movió una vez**. Cualquier consulta o
+  jugada revisa si se acabó el tiempo y cierra la partida: nadie depende de que una pantalla avise. `GET /sala/{codigo}` devuelve los tiempos ya descontados
+  (`tiempo_blancas_ms`, `tiempo_negras_ms`, `reloj_corre`) y los datos de cada jugador (nombre público, nivel, `ausente_s`).
+- **Regla de ausencia** (`presencia_sala.py`): con reloj no se puede dejar la partida. Consultar la sala o jugar es la señal de vida; **más de 20 segundos sin señal
+  = pierde** (si se van los dos, se cierra sin ganador). El rival ve «Sin conexión hace 9 s · pierde en 11 s». La aplicación sigue avisando por el jugador si
+  este se mueve a otra pantalla (no es dejar la partida) y le recuerda volver. Sin reloj se puede salir y volver (limpieza a las 12 h). `motivo_fin` ahora distingue
+  `tiempo` y `ausencia`.
+- **Amigos y compañeros** (`servicios/social/amigos.py`, tabla `amistad`, columna `usuario.codigo_amigo`): los compañeros de curso se pueden retar sin pedirse nada;
+  quien no comparte curso se agrega con **correo o código de amigo** (se comparte por WhatsApp con un enlace `/#amigo=CÓDIGO`). **No hay búsqueda por nombre**
+  (son menores) y la respuesta a una solicitud es siempre la misma exista o no la cuenta; hay límite de 10 solicitudes cada 10 minutos. Rechazar borra la fila.
+- **Retos** (`retos.py`, en memoria): se reta a un compañero o amigo con color y reloj; se crea la sala y el retado recibe un aviso en cualquier pantalla (con tono y
+  vibración), con 90 s para aceptar. **Revancha** con los colores cambiados, aunque no sean amigos. Un reto reemplaza al anterior y nadie puede retar ni
+  aceptar mientras juega otra partida.
+- **Buscar rival de nivel parecido** (`emparejamiento.py`): cola en memoria; se empareja con el mismo reloj y hasta 1 nivel de diferencia, que sube 1 cada 15 s
+  hasta 5 (siempre el más cercano). Los de una institución solo con los de su institución, los de un curso con su curso y los que no tienen curso entre sí.
+  Son partidas amistosas: no calibran el nivel de nadie.
+- **Avisos** (`GET /social/avisos`, cada 3,5 s): retos recibidos, cómo va mi reto o mi búsqueda (cada final se informa una sola vez) y solicitudes pendientes;
+  consultar es también estar «en línea» (45 s).
+- **Docente** (`GET /social/partidas-en-vivo`, «Partidas entre alumnos»): ve las salas abiertas de sus alumnos (con el nombre completo) y las **mira en vivo** en
+  solo lectura. El administrador de una institución, las de toda la institución.
+- **Pantallas:** «Jugar con otros» (buscar rival, crear partida y mandar enlace por WhatsApp, entrar con un código, lista de curso y amigos con «Retar»/«Agregar»,
+  mi código de amigo) y la partida (tablero que se da vuelta para las negras, relojes, jugadas, abandonar, revancha, análisis con Stockfish al terminar).
+  Enlaces `/#sala=CÓDIGO` y `/#amigo=CÓDIGO`: se guardan en la pestaña, se usan apenas hay sesión y también funcionan si todavía no tenía cuenta.
+- **Al eliminar una cuenta** se borran sus amistades y las salas en las que se sentó (antes quedaba una clave foránea colgada en `partida.usuario_*_id`).
+- **Falta / recortado:** torneos y ligas entre cursos, rival que se adapta solo al 50 %, notificaciones push con la aplicación cerrada
+  (solo se avisa con la aplicación abierta) y la app móvil de Luis (el backend es aditivo:
+  puede usar los mismos endpoints).
+
+### Aula virtual y convivencia (26/10/2026)
+
+- **Docente → Mis cursos → Aula:** alumnos y familias, seguimiento, avisos y tareas, torneo y ajustes de clase. El alumno encuentra sus avisos, metas y torneo en **Mi aula**.
+- **Edad y autorización:** edad declarada obligatoria en el registro web de jugadores (3–120); opcional para mantener compatibilidad con clientes anteriores.
+  Un menor o una cuenta sin edad practica individualmente hasta declarar la autorización familiar o entrar a un curso cuyo docente declaró contar con los permisos.
+  La declaración institucional se registra con fecha y auditoría; no se deduce del dominio del correo ni verifica documentos o la identidad del tutor.
+- **Familias:** nombre, teléfono y correo opcional del responsable, editables y eliminables. Solo los ve el alumno, su docente y los administradores de su alcance.
+  Los botones de WhatsApp y correo abren borradores; el docente decide enviarlos. El informe de progreso usa el destinatario familiar guardado.
+- **Cuentas sin correo:** el docente crea hasta 60 por lote, con usuario y clave para entregar o imprimir. Solo puede restablecer cuentas gestionadas;
+  una cuenta personal no cede su contraseña por entrar a un curso. El dominio reservado de alumnos no se admite en el registro público.
+- **Acceso de desarrollo:** tokens ficticios de Google desactivados por defecto. Se habilitan explícitamente solo en pruebas o desarrollo local.
+- **Recuperación personal:** código por SMTP, 15 minutos, un uso, respuesta sin revelar si existe la cuenta, límites por dirección de red/correo e intentos.
+  Al cambiar o restablecer una clave se invalidan los tokens anteriores (acceso, renovación y paso intermedio del doble factor). El cambio propio renueva la sesión actual.
+- **Correo institucional:** dominio opcional por institución; exige propiedad confirmada por Google o código. Una cuenta antigua creada sin SMTP no se considera
+  prueba de propiedad. Las cuentas gestionadas ya inscritas conservan su acceso. Sin SMTP se ofrecen Google o cuentas gestionadas.
+- **Modo clase:** pausa nuevos retos, emparejamientos y salas del curso, cancela las solicitudes de juego pendientes y mantiene las partidas empezadas.
+  Los torneos organizados por el docente y la práctica individual siguen disponibles.
+- **Tablas:** ofrecer, aceptar o rechazar; la oferta caduca al jugar otra jugada y se limita su repetición. Resultado por acuerdo visible en ambos tableros.
+- **Bloqueos y denuncias:** bloqueo privado, filtro de retos y búsquedas; denuncia de compañeros/amigos/rivales con motivo y detalle. Bandeja docente con revisión.
+- **Torneo de curso:** emparejamiento por puntos, rondas, colores, descansos, clasificación y acceso a cada sala. El reloj empieza con la ronda.
+  Antes de abrir salas se comprueba que los participantes sigan activos, inscritos, autorizados y sin otra partida abierta. Un cierre forzado no da puntos a partidas pendientes.
+- **Seguimiento virtual:** tareas con plazo y avance automático, avisos con enlace de clase, alumnos sin actividad o con descenso y contacto a la familia.
+  El sondeo de avisos sociales evita consultas simultáneas para no perder la aceptación de un reto o un rival encontrado.
+- **Documentación y datos:** esquema aditivo y SQL/diccionario regenerados. Ver [guía del aula](guia_aula_virtual.md). Sin cambios en `app_movil/`.
+- **Validación de cierre:** compilación web y TypeScript correctos; 15 comprobaciones de navegador a 360 y 1440 px sin desborde de página ni excepciones,
+  incluyendo aceptación de tablas entre dos cuentas y torneo en marcha. Las 56 pruebas específicas de aula, funciones sociales y recuperación pasaron.
+  Suite general: **1361 aprobadas, 28 omitidas y 7 fallos** en cámara/visión y rechazo de rutas (`test_ruta_brazo_rutinas`, `test_ruta_dataset_vision`, `test_main`).
+  La suite se ejecutó con costo bcrypt reducido únicamente en el proceso de pruebas; la aplicación conserva su configuración normal.
+  Pendiente operativo: configurar y probar un servidor SMTP real. Los mensajes familiares de WhatsApp/correo abren borradores sin requerir ese SMTP.
+
+---
+
 ## Seguridad (revisión del 25/10/2026)
 
 Hecho: sin clave JWT por defecto (si falta `JWT_SECRET_KEY` se usa una al azar por arranque), límite de intentos del login (8 por
@@ -843,9 +995,9 @@ política de contenido en modo «solo informar», CORS configurable con `CORS_OR
 Baja de cuenta y política (25/10/2026): `POST /auth/me/eliminar` borra la cuenta propia con todo lo suyo (vuelve a pedir la
 contraseña, o el correo completo si la cuenta entra solo con Google; 8 intentos fallidos y 429; la cuenta de la plataforma no se
 elimina desde la web). Pantalla pública `/#politica` (`Politica.jsx`) enlazada desde el registro, el botón de Google y Mi Perfil;
-al crear una cuenta con correo en la web hay que marcar la casilla de aceptación y de autorización de menores. **La casilla no se
-guarda en el servidor y la app móvil todavía no la tiene.** Para producción falta: fecha de nacimiento con autorización del tutor
-guardada (quién, cuándo y qué versión), verificación de correo, revisión legal del texto y definir el plazo de los respaldos.
+al crear una cuenta con correo en la web hay que marcar la casilla de aceptación. Desde el 26/10 la declaración de autorización familiar o por curso
+se guarda con fecha; la edad sigue siendo declarada. Falta para producción: comprobación independiente de permisos si se requiere,
+constancia de la versión aceptada de los términos, revisión del texto y definir el plazo de los respaldos.
 
 Segunda tanda (25/10/2026), con el modelo de negocio ya cerrado:
 - Contraseña nueva: mínimo 8 caracteres, con letras y números (`RegistroRequest`); el login sigue aceptando las anteriores.
@@ -865,7 +1017,14 @@ Segunda tanda (25/10/2026), con el modelo de negocio ya cerrado:
   o anuló códigos. Sin datos personales, 1 año. Nueva tabla `auditoria` (SQL regenerado).
 - Verificación de correo (`/auth/verificar-correo`): código de 6 dígitos que vence a los 15 minutos, con límite de intentos y de
   reenvíos. Solo se activa si el servidor define `SMTP_HOST` y `SMTP_REMITENTE`; sin eso todo sigue igual. Es «blanda»: avisa y pide el
-  código, pero no bloquea nada. Nuevas columnas en `usuario` (SQL regenerado).
+  código. Desde el 26/10 sí se exige propiedad comprobada al ingresar a cursos restringidos por dominio. Nuevas columnas en `usuario` (SQL regenerado).
+
+- Verificación en dos pasos (TOTP, RFC 6238) de los facilitadores: se vincula una app de códigos (Google Authenticator, Authy…) con un QR
+  o una clave escrita, con 10 códigos de respaldo de un solo uso. El login pasa a dos pasos (`POST /auth/login` devuelve `requiere_2fa`
+  y `POST /auth/login/2fa` entrega la sesión). El secreto se guarda cifrado, un código no sirve dos veces y los intentos se limitan.
+  La plataforma puede reiniciar el de quien perdió el celular (queda en la auditoría). `DOBLE_FACTOR_OBLIGATORIO=1` la exige a la
+  plataforma y a los administradores de institución. Los jugadores y la app móvil no cambian. Librería nueva: `qrcode` 1.5.4 (frontend,
+  solo dibuja el QR); los códigos se calculan con la biblioteca estándar y `cryptography` (ya instalada con `python-jose`) cifra el secreto.
 
 Pendiente para producción: definir el plazo de los respaldos nocturnos y sumarlo a la política; poner el correo de contacto en
 `Politica.jsx`; volver obligatoria la verificación de correo cuando haya un correo real configurado; guardar en el servidor la

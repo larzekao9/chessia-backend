@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 from backend.esquemas.medallas_esquema import ResumenMedallasResponse
 
@@ -33,6 +33,19 @@ class EditarCursoRequest(BaseModel):
     cupo: int | None = Field(default=None, ge=1, le=120)
     preset_ensenanza: TonoCurso | None = None
     facilitador_id: int | None = None
+    permite_retos: bool | None = None
+    """`false` es el «modo clase»: pausa los retos, la búsqueda de rival y las salas entre los alumnos del curso."""
+    autorizacion_familias: bool | None = None
+    """`true` declara que el docente (o la institución) tiene la autorización de las familias de los alumnos de este curso."""
+
+
+class ActualizarDatosDeFamiliaRequest(BaseModel):
+    """Cuerpo de PATCH /cursos/{id}/estudiantes/{usuario_id}/familia: el docente carga la edad de un alumno y el contacto de su madre, padre o tutor."""
+
+    edad: int | None = Field(default=None, ge=0, le=120)
+    tutor_nombre: str | None = Field(default=None, max_length=100)
+    tutor_telefono: str | None = Field(default=None, max_length=30)
+    tutor_email: EmailStr | None = None
 
 
 class CursoResponse(BaseModel):
@@ -49,6 +62,9 @@ class CursoResponse(BaseModel):
     creado_en: str
     facilitador_id: int
     facilitador_nombre: str
+    permite_retos: bool = True
+    autorizacion_familias: bool = False
+    autorizacion_familias_en: str | None = None
 
 
 class EstudianteDeCursoResponse(BaseModel):
@@ -62,6 +78,15 @@ class EstudianteDeCursoResponse(BaseModel):
     rango_estimado: str | None = None
     activo: bool = True
     unido_en: str
+    edad: int | None = None
+    es_menor: bool | None = None
+    tutor_nombre: str | None = None
+    tutor_telefono: str | None = None
+    tutor_email: str | None = None
+    autorizado: bool = False
+    """`True` si puede jugar con otras personas: es mayor de edad, su familia lo autorizó o el curso está autorizado."""
+    cuenta_gestionada: bool = False
+    """`True` si la creó el docente (entra con un usuario y una clave, sin correo)."""
 
 
 class UnirseCursoRequest(BaseModel):
@@ -150,3 +175,100 @@ class ReporteCursoResponse(BaseModel):
     curso: DatosCursoReporteResponse
     resumen: ResumenReporteResponse
     alumnos: list[AlumnoReporteResponse]
+
+
+class AvisoDeCursoRequest(BaseModel):
+    """Cuerpo de POST /cursos/{id}/avisos: lo que el docente le escribe a su curso."""
+
+    texto: str = Field(min_length=3, max_length=500)
+    enlace: str | None = Field(default=None, max_length=300)
+    """Un enlace opcional, por ejemplo el de la clase en vivo (tiene que empezar con http:// o https://)."""
+
+
+class AvisoDeCursoResponse(BaseModel):
+    id: int
+    texto: str
+    enlace: str | None = None
+    creado_en: str
+    autor: str | None = None
+
+
+class TareaDeCursoRequest(BaseModel):
+    """Cuerpo de POST /cursos/{id}/tareas. `tipo`: `partidas_ia` (partidas terminadas contra Turing o Stockfish), `partidas_amigos` (contra compañeros o amigos) o
+    `precision` (una partida medida con ese porcentaje de precisión o más). Cuenta lo que se juegue desde ahora hasta dentro de `dias` días."""
+
+    titulo: str = Field(min_length=3, max_length=80)
+    tipo: Literal["partidas_ia", "partidas_amigos", "precision"]
+    meta: int = Field(ge=1, le=100)
+    dias: int = Field(default=7, ge=1, le=60)
+
+
+class TareaDelAlumnoResponse(BaseModel):
+    """Una tarea con el avance de quien la mira."""
+
+    id: int
+    titulo: str
+    tipo: str
+    meta: int
+    desde: str
+    hasta: str
+    vencida: bool
+    dias_restantes: int
+    valor: int
+    cumplida: bool
+
+
+class AvanceDeAlumnoResponse(BaseModel):
+    id: int
+    nombre: str
+    valor: int
+    cumplida: bool
+
+
+class TareaDelDocenteResponse(BaseModel):
+    """Una tarea con el avance de cada alumno del curso."""
+
+    id: int
+    titulo: str
+    tipo: str
+    meta: int
+    desde: str
+    hasta: str
+    vencida: bool
+    dias_restantes: int
+    alumnos: list[AvanceDeAlumnoResponse]
+    cumplieron: int
+    total: int
+
+
+class AlumnoNuevoRequest(BaseModel):
+    nombre: str = Field(min_length=2, max_length=100)
+    edad: int | None = Field(default=None, ge=0, le=120)
+    tutor_nombre: str | None = Field(default=None, max_length=100)
+    tutor_telefono: str | None = Field(default=None, max_length=30)
+    tutor_email: EmailStr | None = None
+
+
+class CrearAlumnosRequest(BaseModel):
+    """Cuerpo de POST /cursos/{id}/estudiantes/crear: la lista de alumnos a los que el docente les crea la cuenta (hasta 60 por vez)."""
+
+    alumnos: list[AlumnoNuevoRequest] = Field(min_length=1, max_length=60)
+
+
+class CuentaCreadaResponse(BaseModel):
+    id: int
+    nombre: str
+    usuario: str
+    password: str
+
+
+class CrearAlumnosResponse(BaseModel):
+    """Las cuentas creadas. La clave temporal se ve esta única vez: hay que entregársela al alumno (la pantalla ofrece una hoja para imprimir)."""
+
+    cuentas: list[CuentaCreadaResponse]
+    dominio: str
+
+
+class ClaveRestablecidaResponse(BaseModel):
+    usuario: str
+    password: str

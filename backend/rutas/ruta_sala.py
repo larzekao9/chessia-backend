@@ -19,7 +19,10 @@ from backend.esquemas.sala import (
     UnirseSalaResponse,
 )
 from backend.rutas.ruta_auth import get_current_user, get_db
+from backend.servicios.curso.servicio_reporte import nombre_publico
+from backend.servicios.sala import presencia_sala
 from backend.servicios.sala.analisis_partida_sala import motivo_fin
+from backend.servicios.sala.servicio_sala import oferta_de_tablas, ofrecer_o_aceptar_tablas, rechazar_tablas, reloj_corre, restantes_ms
 from backend.servicios.sala import (
     analisis_sala,
     abandonar,
@@ -29,6 +32,7 @@ from backend.servicios.sala import (
     limpiar_salas_inactivas,
     mover_humano,
     obtener_estado,
+    registrar_presencia,
     sala_activa_de,
     unirse,
 )
@@ -46,24 +50,53 @@ def _limpiar_tolerante() -> None:
         logger.exception("Falló la limpieza de salas inactivas")
 
 
+def _exigir_que_pueda_jugar_con_otros(db: Session, usuario_id: int) -> None:
+    """403 si el jugador no puede jugar con otras personas ahora (su docente pausó los retos o le falta la autorización de su familia). No toca a los docentes."""
+    from backend.modelos.tablas_orm import UsuarioORM
+    from backend.servicios.social import reglas
+    from backend.servicios.social.amigos import ErrorSocial
+
+    usuario = db.get(UsuarioORM, usuario_id)
+    if usuario is None:
+        return
+    try:
+        reglas.exigir(db, usuario)
+    except ErrorSocial as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+
+
+def _jugador_de_sala(db: Session, partida, usuario_id: int | None) -> dict | None:
+    """Los datos de quien ocupa un asiento: nombre (completo y público), avatar, nivel y, con reloj en curso, hace cuánto no da señal de vida."""
+    from backend.modelos.tablas_orm import UsuarioORM
+
+    usuario = db.get(UsuarioORM, usuario_id) if usuario_id is not None else None
+    if usuario is None:
+        return None
+    sin_senal = None
+    if partida.estado == "en_curso" and partida.control_tiempo_ms:
+        sin_senal = presencia_sala.segundos_sin_senal(partida.id, usuario.id)
+    return {
+        "id": usuario.id,
+        "nombre": usuario.nombre,
+        "avatar_url": usuario.avatar_url,
+        "nombre_publico": nombre_publico(usuario.nombre),
+        "nivel": usuario.nivel_estimado,
+        "rango": usuario.rango_estimado,
+        "ausente_s": int(sin_senal) if sin_senal is not None else None,
+    }
+
+
 def _partida_a_sala_response(db: Session, partida, usuario_id: int) -> SalaResponse:
     """Convierte una Partida de dominio a SalaResponse con el rol del usuario."""
     from backend.servicios.sala.servicio_sala import _rol_desde_asiento, _calcular_version
-    from backend.modelos.tablas_orm import UsuarioORM
 
     rol = _rol_desde_asiento(partida, usuario_id)
     turno = "blancas" if partida.tablero.turn == 1 else "negras"  # chess.WHITE = 1
 
     # Jugadores
-    blancas = None
-    if partida.usuario_blancas_id is not None:
-        u_blancas = db.get(UsuarioORM, partida.usuario_blancas_id)
-        blancas = {"id": u_blancas.id, "nombre": u_blancas.nombre, "avatar_url": u_blancas.avatar_url} if u_blancas else None
-
-    negras = None
-    if partida.usuario_negras_id is not None:
-        u_negras = db.get(UsuarioORM, partida.usuario_negras_id)
-        negras = {"id": u_negras.id, "nombre": u_negras.nombre, "avatar_url": u_negras.avatar_url} if u_negras else None
+    blancas = _jugador_de_sala(db, partida, partida.usuario_blancas_id)
+    negras = _jugador_de_sala(db, partida, partida.usuario_negras_id)
+    tiempo_blancas, tiempo_negras = restantes_ms(partida) if partida.control_tiempo_ms else (None, None)
 
     return SalaResponse(
         codigo=partida.codigo_sala or "",
@@ -80,6 +113,11 @@ def _partida_a_sala_response(db: Session, partida, usuario_id: int) -> SalaRespo
         negras=negras,
         rol=rol,
         version=_calcular_version(partida),
+        control_tiempo_ms=partida.control_tiempo_ms,
+        tiempo_blancas_ms=tiempo_blancas,
+        tiempo_negras_ms=tiempo_negras,
+        reloj_corre=reloj_corre(partida),
+        tablas_ofrecidas_por=oferta_de_tablas(partida),
     )
 
 
@@ -108,10 +146,14 @@ def crear_sala_endpoint(
 ):
     """Crea una sala `esperando` con código único.
 
-    Body: `{color: "blancas"|"negras"|"aleatorio"}` (default "aleatorio").
-    Devuelve SalaResponse con `rol="blancas"|"negras"` según el color elegido.
+    Body: `{color: "blancas"|"negras"|"aleatorio", control_tiempo_ms: 0|180000|300000|600000|900000}` (default "aleatorio" y sin reloj).
+    Devuelve SalaResponse con `rol="blancas"|"negras"` según el color elegido. 400 si el control de tiempo no es uno de los permitidos.
     """
-    partida = crear_sala(usuario_id, datos.color)
+    _exigir_que_pueda_jugar_con_otros(db, usuario_id)
+    try:
+        partida = crear_sala(usuario_id, datos.color, datos.control_tiempo_ms)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _partida_a_sala_response(db, partida, usuario_id)
 
 
@@ -129,6 +171,7 @@ def unirse_sala(
     - 404 si el código no existe.
     """
     codigo = codigo.strip().upper()
+    _exigir_que_pueda_jugar_con_otros(db, usuario_id)
     try:
         partida = unirse(codigo, usuario_id)
     except KeyError:
@@ -152,6 +195,53 @@ def obtener_sala(
         partida = obtener_estado(codigo, usuario_id)
     except KeyError:
         raise HTTPException(status_code=404, detail="No existe esa sala")
+    return _partida_a_sala_response(db, partida, usuario_id)
+
+
+@router.post("/{codigo}/presencia", response_model=SalaResponse)
+def presencia_sala_endpoint(
+    codigo: str,
+    usuario_id: int = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Señal de vida de quien está sentado en la sala. `GET /sala/{codigo}` y mover ya cuentan como señal; esto es para una pantalla que
+    consulta poco. En una sala con reloj, más de 20 segundos sin señal hacen perder la partida. Devuelve el estado actual."""
+    codigo = codigo.strip().upper()
+    try:
+        partida = registrar_presencia(codigo, usuario_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No existe esa sala")
+    return _partida_a_sala_response(db, partida, usuario_id)
+
+
+@router.post("/{codigo}/tablas", response_model=SalaResponse)
+def ofrecer_tablas(codigo: str, usuario_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ofrece tablas al rival o, si él ya ofreció, las acepta (la partida termina empatada). La oferta caduca apenas se juega una jugada, y después de ofrecer hay
+    que esperar 4 jugadas para volver a hacerlo. 403 si es espectador; 400 si la partida no está en curso o ya ofreció."""
+    codigo = codigo.strip().upper()
+    try:
+        partida = ofrecer_o_aceptar_tablas(codigo, usuario_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No existe esa sala")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return _partida_a_sala_response(db, partida, usuario_id)
+
+
+@router.post("/{codigo}/tablas/rechazar", response_model=SalaResponse)
+def rechazar_oferta_de_tablas(codigo: str, usuario_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Rechaza la oferta de tablas del rival; la partida sigue. 400 si no hay oferta que rechazar."""
+    codigo = codigo.strip().upper()
+    try:
+        partida = rechazar_tablas(codigo, usuario_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="No existe esa sala")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return _partida_a_sala_response(db, partida, usuario_id)
 
 

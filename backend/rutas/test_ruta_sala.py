@@ -62,7 +62,8 @@ def _registrar_jugador(cliente: TestClient, email: str, nombre: str, rol: str = 
         "email": email,
         "nombre": nombre,
         "password": "test1234",
-        "rol": rol
+        "rol": rol,
+        "edad": 30,  # los menores sin autorización no juegan con otros: estas pruebas son de jugadores adultos
     })
     assert r.status_code == 201
     return r.json()["tokens"]["access_token"]

@@ -12,11 +12,12 @@ ruta usa el mismo límite de intentos por IP que los códigos de facilitador.
 from __future__ import annotations
 
 import secrets
+from datetime import datetime, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from backend.modelos.tablas_orm import CursoORM, InscripcionORM, UsuarioORM
+from backend.modelos.tablas_orm import CursoORM, InscripcionORM, InstitucionORM, UsuarioORM
 from backend.servicios.auth.servicio_auth import es_correo_de_principal
 from backend.servicios.auth.servicio_invitaciones import ALFABETO, normalizar_codigo
 from backend.servicios.facilitador.servicio_videos import listar_videos_piezas
@@ -165,8 +166,13 @@ def actualizar_curso(
     acepta_ingresos: bool | None = None,
     cupo: int | None = None,
     tono: str | None = None,
+    permite_retos: bool | None = None,
+    autorizacion_familias: bool | None = None,
 ) -> CursoORM:
     """Cambia el nombre, el cupo, el tono de Turing y/o abre y cierra los ingresos (cerrado: el código no deja entrar).
+
+    `permite_retos=False` es el «modo clase»: pausa los retos, la búsqueda de rival y las salas entre los alumnos del curso. `autorizacion_familias=True` es la
+    declaración del docente de que tiene la autorización de las familias (queda anotado cuándo).
 
     `tono=None` no lo toca; `tono="facilitador"` hace que el curso vuelva a usar el del facilitador.
 
@@ -185,8 +191,17 @@ def actualizar_curso(
         curso.cupo = cupo
     if acepta_ingresos is not None:
         curso.acepta_ingresos = acepta_ingresos
+    if permite_retos is not None:
+        curso.permite_retos = permite_retos
+    if autorizacion_familias is not None and autorizacion_familias != curso.autorizacion_familias:
+        curso.autorizacion_familias = autorizacion_familias
+        curso.autorizacion_familias_en = datetime.now(timezone.utc).replace(tzinfo=None) if autorizacion_familias else None
     db.commit()
     db.refresh(curso)
+    if permite_retos is False:  # lo que estaba en juego se cancela (retos pendientes y búsquedas de rival)
+        from backend.servicios.social import reglas
+
+        reglas.aplicar_pausa(db, curso.id)
     return curso
 
 
@@ -217,6 +232,9 @@ def regenerar_codigo(db: Session, curso: CursoORM) -> CursoORM:
 
 def eliminar_curso(db: Session, curso: CursoORM) -> int:
     """Borra el curso; sus estudiantes quedan sin curso (no se borra a nadie). Devuelve cuántos se desinscribieron."""
+    from backend.servicios.curso import dependientes
+
+    dependientes.borrar_de_cursos(db, [curso.id])
     desinscritos = db.execute(delete(InscripcionORM).where(InscripcionORM.curso_id == curso.id)).rowcount
     db.delete(curso)
     db.commit()
@@ -248,7 +266,8 @@ def unirse_con_codigo(db: Session, usuario: UsuarioORM, codigo: str) -> CursoORM
     """Inscribe al jugador en el curso del código; si ya estaba en otro, lo mueve.
 
     Raises:
-        CursoCompleto: si el código sirve pero el curso ya no tiene lugares.
+        CursoCompleto: si el código sirve pero el curso ya no tiene lugares, o la institución del docente llegó al tope de su plan o
+            tiene la suscripción vencida.
         ErrorCurso: si no es jugador, o el código no existe o el curso cerró los ingresos (el mensaje no
             distingue cuál, a propósito).
     """
@@ -258,9 +277,35 @@ def unirse_con_codigo(db: Session, usuario: UsuarioORM, codigo: str) -> CursoORM
     curso = db.scalar(select(CursoORM).where(CursoORM.codigo == normalizado)) if normalizado else None
     if curso is None or not curso.acepta_ingresos:
         raise ErrorCurso(MENSAJE_CODIGO_INVALIDO)
+    # Una institución con correo institucional solo recibe a quienes entran con ese correo (el código era correcto: no cuenta como intento fallido).
+    docente = db.get(UsuarioORM, curso.facilitador_id)
+    institucion = db.get(InstitucionORM, docente.institucion_id) if docente is not None and docente.institucion_id is not None else None
     inscripcion = db.scalar(select(InscripcionORM).where(InscripcionORM.usuario_id == usuario.id))
+    ya_pertenece = inscripcion is not None and inscripcion.curso_id == curso.id
+    if institucion is not None and institucion.dominio_correo and not (ya_pertenece and usuario.cuenta_gestionada):
+        if not usuario.email.lower().endswith("@" + institucion.dominio_correo):
+            raise CursoCompleto(f"Este curso es de {institucion.nombre}, que pide entrar con un correo @{institucion.dominio_correo}. Registrate o iniciá sesión con tu correo institucional.")
+        if not usuario.correo_verificado or usuario.correo_verificado_en is None:
+            from backend.servicios.auth.servicio_verificacion import ErrorVerificacion, reenviar, verificacion_activa
+
+            if not verificacion_activa():
+                raise CursoCompleto("Para ingresar con correo institucional tenés que comprobar que es tuyo. Entrá con Google usando ese correo, o pedile a tu docente que te cree una cuenta. El servidor todavía no tiene configurado el envío de códigos.")
+            try:
+                reenviar(db, usuario)
+            except ErrorVerificacion as error:
+                if error.estado != 429:
+                    raise CursoCompleto(str(error)) from error
+            raise CursoCompleto("Verificá tu correo con el código enviado antes de ingresar al curso. Después volvé a usar el código del curso.")
     if (inscripcion is None or inscripcion.curso_id != curso.id) and _inscritos(db, curso.id) >= curso.cupo:
         raise CursoCompleto(f"El curso está completo ({curso.cupo} de {curso.cupo} lugares). Pedile otro código a tu facilitador.")
+    # Si el docente pertenece a una institución, esta necesita la suscripción al día y lugar en su plan (el código era correcto: no
+    # cuenta como intento fallido). Se importa acá para no armar un ciclo de importaciones.
+    from backend.servicios.suscripcion.servicio_suscripciones import ErrorSuscripcion, verificar_cupo_de_institucion
+
+    try:
+        verificar_cupo_de_institucion(db, curso, usuario)
+    except ErrorSuscripcion as error:
+        raise CursoCompleto(str(error)) from error
     if inscripcion is None:
         db.add(InscripcionORM(curso_id=curso.id, usuario_id=usuario.id))
     else:
@@ -351,5 +396,8 @@ def retirar_usuario_de_cursos(db: Session, usuario_id: int) -> None:
     db.execute(delete(InscripcionORM).where(InscripcionORM.usuario_id == usuario_id))
     ids_cursos = db.scalars(select(CursoORM.id).where(CursoORM.facilitador_id == usuario_id)).all()
     if ids_cursos:
+        from backend.servicios.curso import dependientes
+
+        dependientes.borrar_de_cursos(db, list(ids_cursos))
         db.execute(delete(InscripcionORM).where(InscripcionORM.curso_id.in_(ids_cursos)))
         db.execute(delete(CursoORM).where(CursoORM.id.in_(ids_cursos)))

@@ -17,9 +17,12 @@ from backend.modelos.tablas_orm import (
     UsuarioORM,
 )
 from backend.servicios.auth import actualizar_perfil, get_user_by_email
+from backend.servicios.curso import dependientes
 from backend.servicios.curso.servicio_cursos import es_principal, retirar_usuario_de_cursos
 from backend.servicios.institucion.servicio_instituciones import retirar_administrador
 from backend.servicios.medallas.servicio_creacion import retirar_usuario_de_medallas
+from backend.servicios.sala import presencia_sala
+from backend.servicios.social import amigos, emparejamiento, retos
 from backend.servicios.usuario.servicio_avatar import eliminar_avatar
 
 RANGOS_VALIDOS = ("Principiante", "Intermedio", "Avanzado")
@@ -59,6 +62,11 @@ def editar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int, campo
         existente = get_user_by_email(db, email)
         if existente is not None and existente.id != objetivo.id:
             raise ErrorGestionUsuarios("Ya existe otra cuenta con ese correo", 409)
+        if email != objetivo.email:
+            if email.endswith("@alumnos.example.com") or objetivo.cuenta_gestionada:
+                raise ErrorGestionUsuarios("El usuario de una cuenta gestionada lo asigna el sistema y no se cambia por un correo.")
+            cambios.update(correo_verificado=False, correo_verificado_en=None, google_id=None, codigo_verificacion_hash=None,
+                           codigo_verificacion_expira=None, recuperacion_password_hash=None, recuperacion_password_expira=None)
         cambios["email"] = email
 
     rango = cambios.get("rango_estimado")
@@ -113,6 +121,14 @@ def eliminar_usuario(db: Session, objetivo: UsuarioORM, solicitante_id: int, pro
             delete(ExportacionDatasetORM).where(ExportacionDatasetORM.usuario_id == objetivo.id)
         ).rowcount,
     }
+    # Lo social: sus amistades y solicitudes, y lo que tenga en memoria (retos, búsqueda de rival, presencia en salas).
+    borradas["amistades"] = amigos.olvidar_usuario(db, objetivo.id)
+    dependientes.borrar_de_jugador(db, objetivo.id)  # torneos y denuncias
+    retos.olvidar_usuario(objetivo.id)
+    emparejamiento.olvidar_usuario(objetivo.id)
+    presencia_sala.olvidar_usuario(objetivo.id)
+    # En el modo evaluación una cuenta apunta a la otra: se suelta ese vínculo para que la otra cuenta no quede apuntando a una fila borrada.
+    db.execute(update(UsuarioORM).where(UsuarioORM.cuenta_vinculada_id == objetivo.id).values(cuenta_vinculada_id=None))
     # Los códigos de invitación que generó se borran; los que usó quedan (sin nombre) como registro.
     db.execute(delete(CodigoInvitacionORM).where(CodigoInvitacionORM.creado_por == objetivo.id))
     db.execute(update(CodigoInvitacionORM).where(CodigoInvitacionORM.usado_por == objetivo.id).values(usado_por=None))

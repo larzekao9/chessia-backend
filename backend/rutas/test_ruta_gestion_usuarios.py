@@ -29,7 +29,7 @@ def contexto():
 
     def registrar(email: str, rol: str = "jugador") -> dict:
         respuesta = cliente.post(
-            "/auth/registro", json={"email": email, "nombre": "Persona Prueba", "password": "secreto1", "rol": rol}
+            "/auth/registro", json={"email": email, "nombre": "Persona Prueba", "password": "secreto1", "rol": rol, "edad": 30}
         )
         assert respuesta.status_code == 201, respuesta.text
         cuerpo = respuesta.json()

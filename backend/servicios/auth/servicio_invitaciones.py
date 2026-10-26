@@ -20,10 +20,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from backend.modelos.tablas_orm import CodigoInvitacionORM, UsuarioORM
+from backend.modelos.tablas_orm import CodigoInvitacionORM, InstitucionORM, UsuarioORM
 
 MINUTOS_POR_DEFECTO = 15
 MINUTOS_MAXIMOS = 24 * 60
+MINUTOS_MAXIMOS_DE_INSTITUCION = 7 * 24 * 60  # un código para una institución (director o docente) puede esperar hasta 7 días
 LONGITUD_CODIGO = 8
 # Sin 0/O ni 1/I/L: se dicta o se copia sin confundir caracteres.
 ALFABETO = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -95,7 +96,13 @@ def formatear_codigo(codigo_normalizado: str) -> str:
 
 
 def generar_codigo(
-    db: Session, creador_id: int, minutos: int = MINUTOS_POR_DEFECTO, para: str | None = None
+    db: Session,
+    creador_id: int,
+    minutos: int = MINUTOS_POR_DEFECTO,
+    para: str | None = None,
+    institucion_id: int | None = None,
+    como_administrador: bool = False,
+    es_evaluacion: bool = False,
 ) -> tuple[CodigoInvitacionORM, str]:
     """Crea un código nuevo y devuelve `(fila, código_en_claro_formateado)`.
 
@@ -104,8 +111,9 @@ def generar_codigo(
     Raises:
         ValueError: si `minutos` no está entre 1 y 24 h.
     """
-    if not 1 <= minutos <= MINUTOS_MAXIMOS:
-        raise ValueError(f"La duración del código debe estar entre 1 minuto y {MINUTOS_MAXIMOS // 60} horas")
+    maximo = MINUTOS_MAXIMOS_DE_INSTITUCION if institucion_id is not None else MINUTOS_MAXIMOS
+    if not 1 <= minutos <= maximo:
+        raise ValueError(f"La duración del código debe estar entre 1 minuto y {maximo // 60} horas")
     while True:
         codigo = "".join(secrets.choice(ALFABETO) for _ in range(LONGITUD_CODIGO))
         if db.scalar(select(CodigoInvitacionORM.id).where(CodigoInvitacionORM.codigo_hash == _hash(codigo))) is None:
@@ -116,6 +124,9 @@ def generar_codigo(
         para=(para or "").strip() or None,
         creado_en=_ahora(),
         expira_en=_ahora() + timedelta(minutes=minutos),
+        institucion_id=institucion_id,
+        como_administrador=(como_administrador or es_evaluacion) and institucion_id is not None,
+        es_evaluacion=es_evaluacion and institucion_id is not None,
     )
     db.add(fila)
     db.commit()
@@ -151,6 +162,22 @@ def consumir_codigo(db: Session, codigo: str | None) -> CodigoInvitacionORM:
     return db.scalar(select(CodigoInvitacionORM).where(CodigoInvitacionORM.codigo_hash == huella))
 
 
+def informacion_de_codigo(db: Session, codigo: str | None) -> dict | None:
+    """Lo que la pantalla de registro necesita saber de un código (por ejemplo, el que llega en un enlace) SIN gastarlo: cuánto le queda y,
+    si es de una institución, su nombre y si quien lo use queda como administrador o como evaluador. `None` si no sirve."""
+    segundos = verificar_codigo(db, codigo)
+    if segundos is None:
+        return None
+    fila = db.scalar(select(CodigoInvitacionORM).where(CodigoInvitacionORM.codigo_hash == _hash(normalizar_codigo(codigo))))
+    institucion = db.get(InstitucionORM, fila.institucion_id) if fila.institucion_id is not None else None
+    return {
+        "segundos_restantes": segundos,
+        "institucion_nombre": institucion.nombre if institucion else None,
+        "como_administrador": bool(fila.como_administrador),
+        "es_evaluacion": bool(fila.es_evaluacion),
+    }
+
+
 def verificar_codigo(db: Session, codigo: str | None) -> int | None:
     """Dice si un código sirve, SIN gastarlo. Devuelve los segundos que le quedan, o `None` si no sirve.
 
@@ -174,9 +201,16 @@ def estado_codigo(fila: CodigoInvitacionORM) -> str:
     return "vencido" if fila.expira_en <= _ahora() else "vigente"
 
 
-def listar_codigos(db: Session, limite: int = 30) -> list[dict]:
-    """Los códigos más recientes con su estado y, si se usaron, el nombre de quien los usó."""
-    filas = db.scalars(select(CodigoInvitacionORM).order_by(CodigoInvitacionORM.creado_en.desc()).limit(limite)).all()
+def listar_codigos(db: Session, limite: int = 30, institucion_id: int | None = None) -> list[dict]:
+    """Los códigos más recientes con su estado y, si se usaron, el nombre de quien los usó. Con `institucion_id`, solo los de esa institución."""
+    consulta = select(CodigoInvitacionORM).order_by(CodigoInvitacionORM.creado_en.desc()).limit(limite)
+    if institucion_id is not None:
+        consulta = consulta.where(CodigoInvitacionORM.institucion_id == institucion_id)
+    filas = db.scalars(consulta).all()
+    nombres_instituciones = {
+        i.id: i.nombre
+        for i in db.scalars(select(InstitucionORM).where(InstitucionORM.id.in_({f.institucion_id for f in filas if f.institucion_id is not None})))
+    } if any(f.institucion_id is not None for f in filas) else {}
     ids_usuarios = {f.usado_por for f in filas if f.usado_por is not None}
     nombres = (
         {u.id: u.nombre for u in db.scalars(select(UsuarioORM).where(UsuarioORM.id.in_(ids_usuarios)))}
@@ -192,15 +226,19 @@ def listar_codigos(db: Session, limite: int = 30) -> list[dict]:
             "expira_en": f.expira_en,
             "usado_en": f.usado_en,
             "usado_por": nombres.get(f.usado_por),
+            "institucion_id": f.institucion_id,
+            "institucion_nombre": nombres_instituciones.get(f.institucion_id),
+            "como_administrador": bool(f.como_administrador),
+            "es_evaluacion": bool(f.es_evaluacion),
         }
         for f in filas
     ]
 
 
-def revocar_codigo(db: Session, codigo_id: int) -> bool:
-    """Borra un código que todavía no se usó. Devuelve `False` si no existe o ya se usó."""
+def revocar_codigo(db: Session, codigo_id: int, institucion_id: int | None = None) -> bool:
+    """Borra un código que todavía no se usó. Devuelve `False` si no existe, ya se usó o (con `institucion_id`) es de otra institución."""
     fila = db.get(CodigoInvitacionORM, codigo_id)
-    if fila is None or fila.usado_en is not None:
+    if fila is None or fila.usado_en is not None or (institucion_id is not None and fila.institucion_id != institucion_id):
         return False
     db.delete(fila)
     db.commit()

@@ -60,8 +60,10 @@ def test_la_duracion_del_codigo_tiene_limites(contexto) -> None:
     cliente, registrar, _ = contexto
     facilitador = registrar("prof@test.com", "facilitador")
 
-    for minutos in (0, 24 * 60 + 1):
+    # 0 y más de 7 días no entran en el esquema (422); entre 24 horas y 7 días solo valen para un código de institución (400 sin ella)
+    for minutos in (0, 7 * 24 * 60 + 1):
         assert cliente.post("/auth/codigos-facilitador", json={"minutos": minutos}, headers=facilitador["headers"]).status_code == 422
+    assert cliente.post("/auth/codigos-facilitador", json={"minutos": 24 * 60 + 1}, headers=facilitador["headers"]).status_code == 400
 
 
 def test_sin_codigo_no_se_puede_registrar_un_facilitador(contexto, monkeypatch) -> None:
@@ -235,7 +237,13 @@ def test_verificar_no_necesita_sesion_y_no_dice_por_que_falla(contexto, monkeypa
 
     for codigo in ("ZZZZ-ZZZZ", usado, vencido, "", "   "):
         respuesta = _verificar(cliente, codigo)
-        assert respuesta.status_code == 200 and respuesta.json() == {"valido": False, "segundos_restantes": None}, codigo
+        assert respuesta.status_code == 200 and respuesta.json() == {
+            "valido": False,
+            "segundos_restantes": None,
+            "institucion_nombre": None,
+            "como_administrador": False,
+            "es_evaluacion": False,
+        }, codigo  # no dice por qué falla ni a qué institución pertenecía
 
 
 def test_despues_de_varios_codigos_incorrectos_se_bloquea_al_cliente(contexto, monkeypatch) -> None:

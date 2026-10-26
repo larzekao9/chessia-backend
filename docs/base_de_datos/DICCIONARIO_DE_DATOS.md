@@ -3,7 +3,7 @@
 Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_de_datos/generar_esquema.py`. No editar a mano.
 
 - Motor: PostgreSQL 16. La aplicación crea las tablas sola al arrancar; el script equivalente está en [base_completa.sql](base_completa.sql); para producción en Supabase, [base_supabase_produccion.sql](base_supabase_produccion.sql).
-- Tablas: 15 (13 en uso, 2 reservadas para sesiones de clase).
+- Tablas: 24 (22 en uso, 2 reservadas para sesiones de clase).
 - Sin `DATABASE_URL` configurada, la aplicación guarda las partidas en memoria y no usa estas tablas para ellas.
 
 ## Relaciones
@@ -18,6 +18,17 @@ Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_d
 | `usuario` | `codigo_invitacion` | 1 a N | Un facilitador genera muchos códigos de invitación; cada uno lo usa, a lo sumo, una persona. |
 | `institucion` | `usuario` | 1 a N | Una institución agrupa a sus facilitadores (docentes); cada facilitador pertenece a una sola institución. |
 | `usuario` | `institucion` | 1 a 1 | Un usuario es el administrador de, a lo sumo, una institución. |
+| `institucion` | `suscripcion` | 1 a 1 | Cada institución tiene una sola suscripción. |
+| `usuario` | `usuario` | 1 a 1 | En el modo evaluación, un facilitador y su jugador de prueba se apuntan entre sí. |
+| `institucion` | `codigo_invitacion` | 1 a N | Una institución tiene varios códigos de invitación para sus docentes. |
+| `institucion` | `pago` | 1 a N | Una institución avisa muchos pagos a lo largo del tiempo. |
+| `curso` | `torneo` | 1 a N | Un curso arma varios torneos relámpago. |
+| `torneo` | `torneo_jugador` | 1 a N | Un torneo tiene muchos jugadores inscritos. |
+| `torneo` | `torneo_partida` | 1 a N | Un torneo tiene muchas partidas, una por pareja y por ronda. |
+| `curso` | `aviso_curso` | 1 a N | Un curso recibe varios avisos de su docente. |
+| `curso` | `tarea_curso` | 1 a N | Un curso recibe varias tareas de su docente. |
+| `usuario` | `denuncia` | 1 a N | Un jugador puede denunciar a otros o ser denunciado, varias veces. |
+| `usuario` | `amistad` | 1 a N | Un jugador manda y recibe muchas solicitudes de amistad; cada amistad une a dos jugadores distintos. |
 | `usuario` | `curso` | 1 a N | Un facilitador crea varios cursos; cada curso tiene un solo facilitador. |
 | `curso` | `inscripcion` | 1 a N | Un curso tiene muchos jugadores inscritos. |
 | `usuario` | `medalla_personalizada` | 1 a N | Un facilitador crea muchas medallas propias. |
@@ -57,6 +68,9 @@ Institución cliente de la plataforma (asociación, colegio u organizador de tor
 | `tipo` | VARCHAR | no |  | academia | `academia` (academias y clubes), `colegio` u `organizador` (de torneos y exhibiciones). |
 | `administrador_id` | INTEGER | sí | FK → usuario.id |  | Usuario que administra la institución. FK → usuario.id. Nulo hasta que se designa uno. |
 | `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora de creación. |
+| `es_demostracion` | BOOLEAN | no |  | false | `true` en las instituciones de ejemplo que se cargan para mostrar el panel de ingresos; se quitan todas juntas. |
+| `es_prueba` | BOOLEAN | no |  | false | `true` mientras es una institución de prueba, creada para que una institución evalúe el sistema antes de contratarlo. |
+| `dominio_correo` | VARCHAR | sí |  |  | Dominio del correo institucional (por ejemplo `colegio.edu.bo`). Si está definido, solo entran a los cursos de sus docentes los jugadores con un correo de ese dominio. Opcional. |
 
 ## `participante`
 
@@ -83,6 +97,43 @@ Sesión de clase que abre un facilitador, con su dificultad y tipo de oponente.
 | `dificultad` | INTEGER | sí |  |  | Nivel de dificultad de la sesión, de 0 a 20. |
 | `tipo_oponente` | VARCHAR | sí |  |  | `motor`, `modelo` o `participante`. |
 
+## `pago`
+
+Pago que una institución avisa haber hecho. Queda pendiente hasta que la plataforma lo confirma; recién ahí se extiende la suscripción.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador del pago. |
+| `institucion_id` | INTEGER | no | FK → institucion.id |  | Institución que pagó. FK → institucion.id. |
+| `plan` | VARCHAR | no |  |  | Plan que se pagó (`plan_60` o `plan_120`). |
+| `ciclo` | VARCHAR | no |  |  | Ciclo que se pagó: `mensual`, `trimestral` o `anual`. |
+| `monto_bs` | INTEGER | no |  |  | Monto en bolivianos, ya con el descuento del ciclo. |
+| `estado` | VARCHAR | no |  | pendiente | `pendiente` (avisado, sin confirmar), `confirmado` (la plataforma lo confirmó) o `rechazado`. |
+| `referencia` | VARCHAR | sí |  |  | Lo que escribió la institución para que la plataforma lo encuentre (número de transferencia, nombre del titular…). Opcional. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que la institución avisó el pago. |
+| `resuelto_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que la plataforma lo confirmó o rechazó. |
+| `resuelto_por` | INTEGER | sí |  |  | Usuario de la plataforma que lo resolvió. Sin clave foránea: el registro sobrevive a su cuenta. |
+| `periodo_hasta` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Hasta cuándo quedó pagada la suscripción con este pago (solo si se confirmó). |
+| `nota` | VARCHAR | sí |  |  | Comentario de la plataforma al resolver (por ejemplo, el motivo de un rechazo). Opcional. |
+
+## `suscripcion`
+
+Suscripción de una institución: su plan (hasta 60 o hasta 120 alumnos), cuándo termina la prueba gratis (30 días por defecto) y hasta cuándo está pagada. El estado (prueba, activa o vencida) se calcula con las fechas.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la suscripción. |
+| `institucion_id` | INTEGER | no | FK → institucion.id, único |  | Institución a la que pertenece. FK → institucion.id. Única: cada institución tiene una sola suscripción. |
+| `plan` | VARCHAR | no |  | plan_60 | `plan_60` (hasta 60 alumnos, Bs 350 al mes) o `plan_120` (hasta 120 alumnos, Bs 500 al mes). |
+| `ciclo` | VARCHAR | no |  | mensual | Ciclo del último pago: `mensual`, `trimestral` (10 % de descuento) o `anual` (paga 10 meses de 12). |
+| `prueba_hasta` | TIMESTAMP WITHOUT TIME ZONE | no |  |  | Fecha y hora en que termina la prueba gratis (30 días desde que se creó, o el plazo que se haya elegido al dar de alta). |
+| `vigente_hasta` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora hasta la que está pagada. Nulo si nunca pagó. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora de creación. |
+
 ## `usuario`
 
 Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
@@ -107,8 +158,40 @@ Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
 | `preset_ensenanza` | VARCHAR | sí |  |  | Tono con el que Turing habla: `infantil`, `estandar` o `adultos`. Lo elige el facilitador. |
 | `institucion_id` | INTEGER | sí | FK → institucion.id |  | Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma. |
 | `correo_verificado` | BOOLEAN | no |  | true | `true` si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña queda en `false` solo si el servidor tiene configurado el envío de correo. |
+| `correo_verificado_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha de comprobación de la propiedad del correo por código o Google. Nulo para cuentas antiguas o creadas sin envío de correo. Exigido al ingresar por dominio institucional. |
 | `codigo_verificacion_hash` | VARCHAR | sí |  |  | Huella SHA-256 del código de 6 dígitos enviado al correo. El código en claro no se guarda. |
 | `codigo_verificacion_expira` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora a partir de la cual el código de verificación ya no sirve (15 minutos). |
+| `recuperacion_password_hash` | VARCHAR | sí |  |  | Huella del código de recuperación de contraseña, ligada a la contraseña vigente. Nunca se guarda el código en claro. |
+| `recuperacion_password_expira` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Vencimiento UTC del código de recuperación de contraseña (15 minutos). |
+| `version_credenciales` | INTEGER | no |  | 0 | Versión incluida en los tokens. Aumenta al cambiar o restablecer la contraseña para invalidar sesiones anteriores. |
+| `totp_activo` | BOOLEAN | no |  | false | `true` si el facilitador activó la verificación en dos pasos (app de códigos como Google Authenticator). |
+| `totp_secreto` | VARCHAR | sí |  |  | Secreto de la app de códigos, CIFRADO con una clave derivada de `JWT_SECRET_KEY`. Nulo si nunca lo preparó. |
+| `totp_ultimo_paso` | INTEGER | sí |  |  | Último paso de 30 segundos cuyo código se aceptó: impide usar el mismo código dos veces. |
+| `totp_codigos_respaldo` | VARCHAR | sí |  |  | Lista (JSON) de huellas SHA-256 de los códigos de respaldo que le quedan. Los códigos en claro no se guardan. |
+| `cuenta_vinculada_id` | INTEGER | sí | FK → usuario.id |  | Cuenta con la que se alterna en el modo evaluación: un facilitador que prueba el sistema como director apunta a su jugador de prueba, y viceversa. FK → usuario.id. Nulo en el resto de las cuentas. |
+| `codigo_amigo` | VARCHAR | sí |  |  | Código corto para que otro jugador le mande una solicitud de amistad sin saber su correo (se comparte por WhatsApp). Se genera la primera vez que se pide. Nulo hasta entonces. |
+| `tutor_nombre` | VARCHAR | sí |  |  | Nombre de la madre, el padre o el tutor de un jugador menor de edad. Lo ven solo el propio jugador, su docente, el administrador de su institución y la plataforma. |
+| `tutor_telefono` | VARCHAR | sí |  |  | Teléfono (WhatsApp) del tutor, para que el docente pueda avisarle si pasa algo. |
+| `tutor_email` | VARCHAR | sí |  |  | Correo opcional de la madre, el padre o el tutor para compartir el progreso o contactarse. Privado, con el mismo alcance que el teléfono. |
+| `autorizacion_tutor_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que se declaró que el tutor autoriza el uso de ChessIA. Nulo si no se declaró. |
+| `cuenta_gestionada` | BOOLEAN | no |  | false | `true` si la cuenta la creó un docente para un alumno sin correo: el alumno entra con un usuario y una clave que el docente le entrega. |
+
+## `amistad`
+
+Amistad entre dos jugadores que no comparten curso (los compañeros de curso no la necesitan para jugar entre sí). Una solicitud queda pendiente hasta que el destinatario la acepta; si la rechaza, la fila se borra.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la amistad. |
+| `solicitante_id` | INTEGER | no | FK → usuario.id |  | Jugador que mandó la solicitud. FK → usuario.id. |
+| `destinatario_id` | INTEGER | no | FK → usuario.id |  | Jugador que la recibe y la acepta o la rechaza. FK → usuario.id. |
+| `estado` | VARCHAR | no |  | pendiente | `pendiente` (esperando respuesta) o `aceptada`. Una solicitud rechazada se borra. |
+| `creada_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se mandó la solicitud. |
+| `respondida_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que el destinatario la aceptó. Nulo mientras está pendiente. |
+
+**Restricciones:** `uq_amistad_par` único (solicitante_id, destinatario_id).
 
 ## `calibracion`
 
@@ -145,6 +228,9 @@ Códigos de un solo uso, con vencimiento, que un facilitador genera para que otr
 | `expira_en` | TIMESTAMP WITHOUT TIME ZONE | no |  |  | Fecha y hora a partir de la cual el código ya no sirve. |
 | `usado_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que se usó. Nulo mientras no se haya usado: sirve una sola vez. |
 | `usado_por` | INTEGER | sí | FK → usuario.id |  | Usuario que se registró con este código. |
+| `institucion_id` | INTEGER | sí | FK → institucion.id |  | Institución para la que se generó. FK → institucion.id. Quien se registra con el código queda dentro de ella. Nulo si solo da permiso para registrarse como facilitador. |
+| `como_administrador` | BOOLEAN | no |  | false | `true` si quien se registra con el código queda como administrador de la institución (solo lo genera la plataforma). |
+| `es_evaluacion` | BOOLEAN | no |  | false | `true` si es una invitación para evaluar el sistema: a quien se registre se le crea además un jugador de prueba. |
 
 ## `curso`
 
@@ -161,7 +247,29 @@ Grupo de estudiantes de un facilitador. Los jugadores entran con un código del 
 | `acepta_ingresos` | BOOLEAN | no |  | true | Si es falso, el código no deja entrar a nadie más; los ya inscritos siguen. |
 | `cupo` | INTEGER | no |  | 60 | Cantidad máxima de jugadores que pueden inscribirse, de 1 a 120 (60 por defecto). Lo define quien crea el curso. |
 | `preset_ensenanza` | VARCHAR | sí |  |  | Tono con el que Turing les habla a los jugadores de este curso: `infantil`, `estandar` o `adultos`. Nulo = se usa el tono que eligió el facilitador en su perfil. |
+| `permite_retos` | BOOLEAN | no |  | true | «Modo clase»: si es falso, los alumnos del curso no pueden retarse, buscar rival ni jugar salas entre ellos (el docente lo pausa mientras explica). |
+| `autorizacion_familias` | BOOLEAN | no |  | false | El docente (o la institución) declara que tiene la autorización de las familias de los alumnos de este curso. Con eso los alumnos menores no cargan los datos de un tutor uno por uno para jugar con sus compañeros. |
+| `autorizacion_familias_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que se hizo esa declaración. Nulo si no se hizo. |
 | `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora de creación. |
+
+## `denuncia`
+
+Denuncia de un jugador contra otro (conducta, trampa o abandonos). La revisa el docente del denunciado, el administrador de su institución o la plataforma.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la denuncia. |
+| `denunciante_id` | INTEGER | no | FK → usuario.id |  | Jugador que denuncia. FK → usuario.id. |
+| `denunciado_id` | INTEGER | no | FK → usuario.id |  | Jugador denunciado. FK → usuario.id. |
+| `motivo` | VARCHAR | no |  |  | `conducta`, `trampa`, `abandono` u `otro`. |
+| `detalle` | VARCHAR | sí |  |  | Lo que escribió quien denuncia (hasta 300 caracteres). Opcional. |
+| `codigo_sala` | VARCHAR | sí |  |  | Código de la sala donde pasó, si fue en una partida. Opcional. |
+| `estado` | VARCHAR | no |  | nueva | `nueva` o `revisada`. |
+| `creada_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se hizo. |
+| `resuelta_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que un docente o la plataforma la marcó como revisada. |
+| `resuelta_por` | INTEGER | sí |  |  | Usuario que la revisó. Sin clave foránea: el registro sobrevive a su cuenta. |
 
 ## `exportacion_dataset`
 
@@ -264,6 +372,21 @@ Cada partida jugada: quién la jugó, contra qué oponente, a qué nivel, la pos
 | `usuario_blancas_id` | INTEGER | sí | FK → usuario.id |  | Usuario que juega con blancas en la sala. Nulo si el asiento está libre. FK → usuario.id. |
 | `usuario_negras_id` | INTEGER | sí | FK → usuario.id |  | Usuario que juega con negras en la sala. Nulo si el asiento está libre. FK → usuario.id. |
 
+## `aviso_curso`
+
+Aviso de un docente a su curso (una consigna, el enlace de una clase en vivo). Es en un solo sentido: los alumnos lo leen, no responden.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador del aviso. |
+| `curso_id` | INTEGER | no | FK → curso.id |  | Curso al que va dirigido. FK → curso.id. |
+| `autor_id` | INTEGER | no |  |  | Docente que lo escribió. Sin clave foránea: el aviso sobrevive a su cuenta. |
+| `texto` | VARCHAR | no |  |  | El mensaje (hasta 500 caracteres). |
+| `enlace` | VARCHAR | sí |  |  | Un enlace opcional, por ejemplo el de una clase en vivo. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se publicó. |
+
 ## `inscripcion`
 
 Un jugador dentro de un curso. Un jugador está en un solo curso a la vez.
@@ -298,6 +421,75 @@ Detalle de cada jugada de una partida: quién la decidió y cómo la evaluó Sto
 | `evaluacion_mejor_cp` | INTEGER | sí |  |  | Evaluación, en centipeones, de la mejor jugada posible en esa posición. |
 | `mate_en_mejor` | INTEGER | sí |  |  | Mate forzado disponible con la mejor jugada. Nulo si no lo había. |
 
+## `tarea_curso`
+
+Tarea de un docente para su curso, con una meta que el sistema mide solo con lo que los alumnos juegan (partidas contra la IA, partidas entre compañeros o precisión).
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la tarea. |
+| `curso_id` | INTEGER | no | FK → curso.id |  | Curso al que se le pone. FK → curso.id. |
+| `autor_id` | INTEGER | no |  |  | Docente que la puso. Sin clave foránea: la tarea sobrevive a su cuenta. |
+| `titulo` | VARCHAR | no |  |  | Cómo se la presenta a los alumnos. |
+| `tipo` | VARCHAR | no |  |  | Qué se mide: `partidas_ia` (partidas terminadas contra Turing o Stockfish), `partidas_amigos` (partidas terminadas contra compañeros o amigos) o `precision` (una partida con esa precisión o más). |
+| `meta` | INTEGER | no |  |  | La cantidad de partidas, o el porcentaje de precisión, que hay que alcanzar. |
+| `desde` | TIMESTAMP WITHOUT TIME ZONE | no |  |  | Desde cuándo cuenta lo que juegan. |
+| `hasta` | TIMESTAMP WITHOUT TIME ZONE | no |  |  | Hasta cuándo cuenta (fecha límite). |
+| `creada_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se puso. |
+
+## `torneo`
+
+Torneo relámpago de un curso (sistema suizo): nombre, reloj, cantidad de rondas y en qué ronda va. El docente lo arma y empareja cada ronda.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador del torneo. |
+| `curso_id` | INTEGER | no | FK → curso.id |  | Curso al que pertenece. FK → curso.id. |
+| `nombre` | VARCHAR | no |  |  | Nombre del torneo, que elige el docente. |
+| `control_tiempo_ms` | INTEGER | no |  | 0 | Milisegundos por lado de cada partida (`0` = sin reloj). |
+| `rondas` | INTEGER | no |  | 3 | Cuántas rondas tiene (de 1 a 9). |
+| `ronda_actual` | INTEGER | no |  | 0 | La ronda que se está jugando (0 mientras se inscriben). |
+| `estado` | VARCHAR | no |  | inscripcion | `inscripcion`, `en_juego` o `terminado`. |
+| `creado_por` | INTEGER | no |  |  | Docente que lo armó. Sin clave foránea: el torneo sobrevive a su cuenta. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora de creación. |
+
+## `torneo_jugador`
+
+Jugador inscrito en un torneo, con sus puntos (1 por victoria, 0,5 por tablas, 1 por descanso).
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la inscripción. |
+| `torneo_id` | INTEGER | no | FK → torneo.id |  | Torneo en el que juega. FK → torneo.id. |
+| `usuario_id` | INTEGER | no | FK → usuario.id |  | Jugador inscrito. FK → usuario.id. |
+| `puntos` | FLOAT | no |  | 0 | Puntos acumulados: 1 por victoria, 0,5 por tablas, 1 por descanso. |
+| `descansos` | INTEGER | no |  | 0 | Rondas en que le tocó descansar (cuando los jugadores son impares). |
+| `inscrito_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se inscribió. |
+
+**Restricciones:** `uq_torneo_jugador` único (torneo_id, usuario_id).
+
+## `torneo_partida`
+
+Una partida de una ronda de un torneo: quién juega con blancas y con negras, su sala y cómo terminó.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador de la partida del torneo. |
+| `torneo_id` | INTEGER | no | FK → torneo.id |  | Torneo al que pertenece. FK → torneo.id. |
+| `ronda` | INTEGER | no |  |  | Ronda en que se juega. |
+| `blancas_id` | INTEGER | no | FK → usuario.id |  | Jugador de blancas. FK → usuario.id. |
+| `negras_id` | INTEGER | sí | FK → usuario.id |  | Jugador de negras. FK → usuario.id. Nulo si el de blancas descansa esa ronda. |
+| `codigo_sala` | VARCHAR | sí |  |  | Código de la sala donde se juega. |
+| `resultado` | VARCHAR | sí |  |  | `1-0`, `0-1`, `1/2-1/2` o `0-0` (nadie jugó). Nulo mientras se juega. |
+
 ## Diagrama entidad-relación (Mermaid)
 
 ```mermaid
@@ -310,6 +502,17 @@ erDiagram
     usuario ||--o{ codigo_invitacion : tiene
     institucion ||--o{ usuario : tiene
     usuario ||--o{ institucion : tiene
+    institucion ||--o{ suscripcion : tiene
+    usuario ||--o{ usuario : tiene
+    institucion ||--o{ codigo_invitacion : tiene
+    institucion ||--o{ pago : tiene
+    curso ||--o{ torneo : tiene
+    torneo ||--o{ torneo_jugador : tiene
+    torneo ||--o{ torneo_partida : tiene
+    curso ||--o{ aviso_curso : tiene
+    curso ||--o{ tarea_curso : tiene
+    usuario ||--o{ denuncia : tiene
+    usuario ||--o{ amistad : tiene
     usuario ||--o{ curso : tiene
     curso ||--o{ inscripcion : tiene
     usuario ||--o{ medalla_personalizada : tiene
@@ -334,6 +537,9 @@ erDiagram
         VARCHAR tipo
         INTEGER administrador_id FK
         TIMESTAMP creado_en
+        BOOLEAN es_demostracion
+        BOOLEAN es_prueba
+        VARCHAR dominio_correo
     }
     participante {
         INTEGER id PK
@@ -345,6 +551,29 @@ erDiagram
         TIMESTAMP fecha
         INTEGER dificultad
         VARCHAR tipo_oponente
+    }
+    pago {
+        INTEGER id PK
+        INTEGER institucion_id FK
+        VARCHAR plan
+        VARCHAR ciclo
+        INTEGER monto_bs
+        VARCHAR estado
+        VARCHAR referencia
+        TIMESTAMP creado_en
+        TIMESTAMP resuelto_en
+        INTEGER resuelto_por
+        TIMESTAMP periodo_hasta
+        VARCHAR nota
+    }
+    suscripcion {
+        INTEGER id PK
+        INTEGER institucion_id FK
+        VARCHAR plan
+        VARCHAR ciclo
+        TIMESTAMP prueba_hasta
+        TIMESTAMP vigente_hasta
+        TIMESTAMP creado_en
     }
     usuario {
         INTEGER id PK
@@ -363,8 +592,31 @@ erDiagram
         VARCHAR preset_ensenanza
         INTEGER institucion_id FK
         BOOLEAN correo_verificado
+        TIMESTAMP correo_verificado_en
         VARCHAR codigo_verificacion_hash
         TIMESTAMP codigo_verificacion_expira
+        VARCHAR recuperacion_password_hash
+        TIMESTAMP recuperacion_password_expira
+        INTEGER version_credenciales
+        BOOLEAN totp_activo
+        VARCHAR totp_secreto
+        INTEGER totp_ultimo_paso
+        VARCHAR totp_codigos_respaldo
+        INTEGER cuenta_vinculada_id FK
+        VARCHAR codigo_amigo
+        VARCHAR tutor_nombre
+        VARCHAR tutor_telefono
+        VARCHAR tutor_email
+        TIMESTAMP autorizacion_tutor_en
+        BOOLEAN cuenta_gestionada
+    }
+    amistad {
+        INTEGER id PK
+        INTEGER solicitante_id FK
+        INTEGER destinatario_id FK
+        VARCHAR estado
+        TIMESTAMP creada_en
+        TIMESTAMP respondida_en
     }
     calibracion {
         INTEGER id PK
@@ -385,6 +637,9 @@ erDiagram
         TIMESTAMP expira_en
         TIMESTAMP usado_en
         INTEGER usado_por FK
+        INTEGER institucion_id FK
+        BOOLEAN como_administrador
+        BOOLEAN es_evaluacion
     }
     curso {
         INTEGER id PK
@@ -394,7 +649,22 @@ erDiagram
         BOOLEAN acepta_ingresos
         INTEGER cupo
         VARCHAR preset_ensenanza
+        BOOLEAN permite_retos
+        BOOLEAN autorizacion_familias
+        TIMESTAMP autorizacion_familias_en
         TIMESTAMP creado_en
+    }
+    denuncia {
+        INTEGER id PK
+        INTEGER denunciante_id FK
+        INTEGER denunciado_id FK
+        VARCHAR motivo
+        VARCHAR detalle
+        VARCHAR codigo_sala
+        VARCHAR estado
+        TIMESTAMP creada_en
+        TIMESTAMP resuelta_en
+        INTEGER resuelta_por
     }
     exportacion_dataset {
         INTEGER id PK
@@ -460,6 +730,14 @@ erDiagram
         INTEGER usuario_blancas_id FK
         INTEGER usuario_negras_id FK
     }
+    aviso_curso {
+        INTEGER id PK
+        INTEGER curso_id FK
+        INTEGER autor_id
+        VARCHAR texto
+        VARCHAR enlace
+        TIMESTAMP creado_en
+    }
     inscripcion {
         INTEGER id PK
         INTEGER curso_id FK
@@ -479,6 +757,45 @@ erDiagram
         INTEGER mate_en
         INTEGER evaluacion_mejor_cp
         INTEGER mate_en_mejor
+    }
+    tarea_curso {
+        INTEGER id PK
+        INTEGER curso_id FK
+        INTEGER autor_id
+        VARCHAR titulo
+        VARCHAR tipo
+        INTEGER meta
+        TIMESTAMP desde
+        TIMESTAMP hasta
+        TIMESTAMP creada_en
+    }
+    torneo {
+        INTEGER id PK
+        INTEGER curso_id FK
+        VARCHAR nombre
+        INTEGER control_tiempo_ms
+        INTEGER rondas
+        INTEGER ronda_actual
+        VARCHAR estado
+        INTEGER creado_por
+        TIMESTAMP creado_en
+    }
+    torneo_jugador {
+        INTEGER id PK
+        INTEGER torneo_id FK
+        INTEGER usuario_id FK
+        FLOAT puntos
+        INTEGER descansos
+        TIMESTAMP inscrito_en
+    }
+    torneo_partida {
+        INTEGER id PK
+        INTEGER torneo_id FK
+        INTEGER ronda
+        INTEGER blancas_id FK
+        INTEGER negras_id FK
+        VARCHAR codigo_sala
+        VARCHAR resultado
     }
 ```
 
@@ -503,6 +820,9 @@ classDiagram
         -VARCHAR tipo
         -INTEGER administrador_id
         -TIMESTAMP creado_en
+        -BOOLEAN es_demostracion
+        -BOOLEAN es_prueba
+        -VARCHAR dominio_correo
     }
     class Participante {
         -INTEGER id
@@ -514,6 +834,29 @@ classDiagram
         -TIMESTAMP fecha
         -INTEGER dificultad
         -VARCHAR tipo_oponente
+    }
+    class Pago {
+        -INTEGER id
+        -INTEGER institucion_id
+        -VARCHAR plan
+        -VARCHAR ciclo
+        -INTEGER monto_bs
+        -VARCHAR estado
+        -VARCHAR referencia
+        -TIMESTAMP creado_en
+        -TIMESTAMP resuelto_en
+        -INTEGER resuelto_por
+        -TIMESTAMP periodo_hasta
+        -VARCHAR nota
+    }
+    class Suscripcion {
+        -INTEGER id
+        -INTEGER institucion_id
+        -VARCHAR plan
+        -VARCHAR ciclo
+        -TIMESTAMP prueba_hasta
+        -TIMESTAMP vigente_hasta
+        -TIMESTAMP creado_en
     }
     class Usuario {
         -INTEGER id
@@ -532,8 +875,31 @@ classDiagram
         -VARCHAR preset_ensenanza
         -INTEGER institucion_id
         -BOOLEAN correo_verificado
+        -TIMESTAMP correo_verificado_en
         -VARCHAR codigo_verificacion_hash
         -TIMESTAMP codigo_verificacion_expira
+        -VARCHAR recuperacion_password_hash
+        -TIMESTAMP recuperacion_password_expira
+        -INTEGER version_credenciales
+        -BOOLEAN totp_activo
+        -VARCHAR totp_secreto
+        -INTEGER totp_ultimo_paso
+        -VARCHAR totp_codigos_respaldo
+        -INTEGER cuenta_vinculada_id
+        -VARCHAR codigo_amigo
+        -VARCHAR tutor_nombre
+        -VARCHAR tutor_telefono
+        -VARCHAR tutor_email
+        -TIMESTAMP autorizacion_tutor_en
+        -BOOLEAN cuenta_gestionada
+    }
+    class Amistad {
+        -INTEGER id
+        -INTEGER solicitante_id
+        -INTEGER destinatario_id
+        -VARCHAR estado
+        -TIMESTAMP creada_en
+        -TIMESTAMP respondida_en
     }
     class Calibracion {
         -INTEGER id
@@ -554,6 +920,9 @@ classDiagram
         -TIMESTAMP expira_en
         -TIMESTAMP usado_en
         -INTEGER usado_por
+        -INTEGER institucion_id
+        -BOOLEAN como_administrador
+        -BOOLEAN es_evaluacion
     }
     class Curso {
         -INTEGER id
@@ -563,7 +932,22 @@ classDiagram
         -BOOLEAN acepta_ingresos
         -INTEGER cupo
         -VARCHAR preset_ensenanza
+        -BOOLEAN permite_retos
+        -BOOLEAN autorizacion_familias
+        -TIMESTAMP autorizacion_familias_en
         -TIMESTAMP creado_en
+    }
+    class Denuncia {
+        -INTEGER id
+        -INTEGER denunciante_id
+        -INTEGER denunciado_id
+        -VARCHAR motivo
+        -VARCHAR detalle
+        -VARCHAR codigo_sala
+        -VARCHAR estado
+        -TIMESTAMP creada_en
+        -TIMESTAMP resuelta_en
+        -INTEGER resuelta_por
     }
     class ExportacionDataset {
         -INTEGER id
@@ -629,6 +1013,14 @@ classDiagram
         -INTEGER usuario_blancas_id
         -INTEGER usuario_negras_id
     }
+    class AvisoCurso {
+        -INTEGER id
+        -INTEGER curso_id
+        -INTEGER autor_id
+        -VARCHAR texto
+        -VARCHAR enlace
+        -TIMESTAMP creado_en
+    }
     class Inscripcion {
         -INTEGER id
         -INTEGER curso_id
@@ -649,6 +1041,45 @@ classDiagram
         -INTEGER evaluacion_mejor_cp
         -INTEGER mate_en_mejor
     }
+    class TareaCurso {
+        -INTEGER id
+        -INTEGER curso_id
+        -INTEGER autor_id
+        -VARCHAR titulo
+        -VARCHAR tipo
+        -INTEGER meta
+        -TIMESTAMP desde
+        -TIMESTAMP hasta
+        -TIMESTAMP creada_en
+    }
+    class Torneo {
+        -INTEGER id
+        -INTEGER curso_id
+        -VARCHAR nombre
+        -INTEGER control_tiempo_ms
+        -INTEGER rondas
+        -INTEGER ronda_actual
+        -VARCHAR estado
+        -INTEGER creado_por
+        -TIMESTAMP creado_en
+    }
+    class TorneoJugador {
+        -INTEGER id
+        -INTEGER torneo_id
+        -INTEGER usuario_id
+        -FLOAT puntos
+        -INTEGER descansos
+        -TIMESTAMP inscrito_en
+    }
+    class TorneoPartida {
+        -INTEGER id
+        -INTEGER torneo_id
+        -INTEGER ronda
+        -INTEGER blancas_id
+        -INTEGER negras_id
+        -VARCHAR codigo_sala
+        -VARCHAR resultado
+    }
     Usuario "1" --> "0..*" Partida
     Partida "1" --> "0..*" Jugada
     Usuario "1" --> "0..*" MensajeTutor
@@ -657,6 +1088,17 @@ classDiagram
     Usuario "1" --> "0..*" CodigoInvitacion
     Institucion "1" --> "0..*" Usuario
     Usuario "1" --> "0..*" Institucion
+    Institucion "1" --> "0..*" Suscripcion
+    Usuario "1" --> "0..*" Usuario
+    Institucion "1" --> "0..*" CodigoInvitacion
+    Institucion "1" --> "0..*" Pago
+    Curso "1" --> "0..*" Torneo
+    Torneo "1" --> "0..*" TorneoJugador
+    Torneo "1" --> "0..*" TorneoPartida
+    Curso "1" --> "0..*" AvisoCurso
+    Curso "1" --> "0..*" TareaCurso
+    Usuario "1" --> "0..*" Denuncia
+    Usuario "1" --> "0..*" Amistad
     Usuario "1" --> "0..*" Curso
     Curso "1" --> "0..*" Inscripcion
     Usuario "1" --> "0..*" MedallaPersonalizada

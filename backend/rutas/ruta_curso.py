@@ -10,7 +10,17 @@ from sqlalchemy.orm import Session
 
 from backend.database import fecha_a_iso
 from backend.esquemas.curso_esquema import (
+    ActualizarDatosDeFamiliaRequest,
     AlumnoReporteResponse,
+    AvisoDeCursoRequest,
+    AvisoDeCursoResponse,
+    ClaveRestablecidaResponse,
+    CrearAlumnosRequest,
+    CrearAlumnosResponse,
+    CuentaCreadaResponse,
+    TareaDeCursoRequest,
+    TareaDelAlumnoResponse,
+    TareaDelDocenteResponse,
     CrearCursoRequest,
     CursoDelJugadorResponse,
     CursoResponse,
@@ -25,8 +35,12 @@ from backend.rutas.ruta_auth import _cliente_de, _exigir_intentos_disponibles, g
 from backend.servicios.auth import get_user_by_id
 from backend.servicios.auth.servicio_invitaciones import registrar_intento_fallido
 from backend.servicios.curso import servicio_cursos as cursos
+from backend.servicios.curso import servicio_aula as aula
+from backend.servicios.curso import servicio_cuentas as cuentas_de_alumnos
 from backend.servicios.curso import servicio_reporte as reportes
+from backend.servicios.auditoria import registrar as auditar
 from backend.servicios.curso.servicio_cursos import CursoCompleto, ErrorCurso
+from backend.servicios.usuario import servicio_autorizacion as autorizacion
 
 router = APIRouter(prefix="/cursos", tags=["cursos"])
 
@@ -45,6 +59,9 @@ def _respuesta_curso(db: Session, curso: CursoORM, estudiantes: int) -> CursoRes
         creado_en=fecha_a_iso(curso.creado_en),
         facilitador_id=curso.facilitador_id,
         facilitador_nombre=dueno.nombre if dueno else "",
+        permite_retos=curso.permite_retos,
+        autorizacion_familias=curso.autorizacion_familias,
+        autorizacion_familias_en=fecha_a_iso(curso.autorizacion_familias_en) if curso.autorizacion_familias_en else None,
     )
 
 
@@ -134,6 +151,24 @@ def ranking(
     return RankingResponse(**reportes.ranking(db, usuario, limite, curso))
 
 
+@router.get("/mio/avisos", response_model=list[AvisoDeCursoResponse], summary="Los avisos del docente a mi curso")
+def avisos_de_mi_curso(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> list[AvisoDeCursoResponse]:
+    """Los últimos avisos que el docente le escribió al curso del jugador (vacío si no está en ninguno). Se leen, no se responden."""
+    curso = cursos.curso_de(db, user_id)
+    if curso is None:
+        return []
+    return [AvisoDeCursoResponse(**{**a, "creado_en": fecha_a_iso(a["creado_en"])}) for a in aula.avisos_del_curso(db, curso.id)]
+
+
+@router.get("/mio/tareas", response_model=list[TareaDelAlumnoResponse], summary="Las tareas de mi curso con mi avance")
+def tareas_de_mi_curso(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> list[TareaDelAlumnoResponse]:
+    """Las tareas que el docente le puso al curso del jugador, con lo que lleva cada una (se mide solo con lo que jugó)."""
+    curso = cursos.curso_de(db, user_id)
+    if curso is None:
+        return []
+    return [TareaDelAlumnoResponse(**{**t, "desde": fecha_a_iso(t["desde"]), "hasta": fecha_a_iso(t["hasta"])}) for t in aula.tareas_para_el_alumno(db, curso.id, user_id)]
+
+
 @router.post("/salir", status_code=status.HTTP_204_NO_CONTENT, summary="Salir del curso (jugador)")
 def salir(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
     """El jugador deja su curso. 404 si no estaba en ninguno."""
@@ -192,7 +227,16 @@ def editar_curso(
     try:
         if data.facilitador_id is not None:
             curso = cursos.reasignar_curso(db, curso, data.facilitador_id)  # primero lo que puede fallar
-        curso = cursos.actualizar_curso(db, curso, data.nombre, data.acepta_ingresos, data.cupo, data.preset_ensenanza)
+        curso = cursos.actualizar_curso(
+            db,
+            curso,
+            data.nombre,
+            data.acepta_ingresos,
+            data.cupo,
+            data.preset_ensenanza,
+            permite_retos=data.permite_retos,
+            autorizacion_familias=data.autorizacion_familias,
+        )
     except ErrorCurso as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     return _respuesta_curso(db, curso, len(cursos.estudiantes_del_curso(db, curso)))
@@ -255,9 +299,66 @@ def estudiantes(
             rango_estimado=item["usuario"].rango_estimado,
             activo=item["usuario"].activo,
             unido_en=fecha_a_iso(item["unido_en"]),
+            edad=item["usuario"].edad,
+            es_menor=None if item["usuario"].edad is None else item["usuario"].edad < autorizacion.MAYORIA_DE_EDAD,
+            tutor_nombre=item["usuario"].tutor_nombre,
+            tutor_telefono=item["usuario"].tutor_telefono,
+            tutor_email=item["usuario"].tutor_email,
+            autorizado=curso.autorizacion_familias or autorizacion.autorizado_por_si_mismo(item["usuario"]),
+            cuenta_gestionada=item["usuario"].cuenta_gestionada,
         )
         for item in cursos.estudiantes_del_curso(db, curso)
     ]
+
+
+@router.patch(
+    "/{curso_id}/estudiantes/{usuario_id}/familia",
+    response_model=EstudianteDeCursoResponse,
+    summary="Cargar la edad y el contacto de la familia de un alumno (docente)",
+)
+def datos_de_familia_del_alumno(
+    curso_id: int,
+    usuario_id: int,
+    data: ActualizarDatosDeFamiliaRequest,
+    facilitador_id: int = Depends(get_current_facilitador),
+    db: Session = Depends(get_db),
+) -> EstudianteDeCursoResponse:
+    """El docente carga o corrige la edad de un alumno y el nombre y el teléfono de su madre, padre o tutor, para poder avisarles si pasa algo. 404 si el
+    alumno no está en este curso. Solo cambia lo que viene."""
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    inscripto = next((item for item in cursos.estudiantes_del_curso(db, curso) if item["usuario"].id == usuario_id), None)
+    if inscripto is None:
+        raise HTTPException(status_code=404, detail="Ese alumno no está en este curso")
+    alumno = inscripto["usuario"]
+    campos = data.model_dump(exclude_unset=True)
+    try:
+        if "edad" in campos:
+            alumno.edad = autorizacion.validar_edad(campos["edad"])
+        if {"tutor_nombre", "tutor_telefono", "tutor_email"} & campos.keys():
+            autorizacion.guardar_datos_del_tutor(
+                alumno, campos.get("tutor_nombre"), campos.get("tutor_telefono"), None, campos_presentes=set(campos), email=campos.get("tutor_email")
+            )
+    except autorizacion.ErrorAutorizacion as error:
+        db.rollback()
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    db.commit()
+    return EstudianteDeCursoResponse(
+        id=alumno.id,
+        nombre=alumno.nombre,
+        email=alumno.email,
+        avatar_url=alumno.avatar_url,
+        nivel_estimado=alumno.nivel_estimado,
+        rango_estimado=alumno.rango_estimado,
+        activo=alumno.activo,
+        unido_en=fecha_a_iso(inscripto["unido_en"]),
+        edad=alumno.edad,
+        es_menor=None if alumno.edad is None else alumno.edad < autorizacion.MAYORIA_DE_EDAD,
+        tutor_nombre=alumno.tutor_nombre,
+        tutor_telefono=alumno.tutor_telefono,
+        tutor_email=alumno.tutor_email,
+        autorizado=curso.autorizacion_familias or autorizacion.autorizado_por_si_mismo(alumno),
+        cuenta_gestionada=alumno.cuenta_gestionada,
+    )
 
 
 @router.delete(
@@ -274,3 +375,102 @@ def quitar_estudiante(
     if not cursos.quitar_estudiante(db, curso, usuario_id):
         raise HTTPException(status_code=404, detail="Ese estudiante no está en el curso")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- seguimiento a distancia: avisos, tareas y cuentas (docente) ---------------------------------------------------------------------
+@router.get("/{curso_id}/avisos", response_model=list[AvisoDeCursoResponse], summary="Los avisos que le escribí al curso")
+def avisos_del_curso(curso_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)) -> list[AvisoDeCursoResponse]:
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    return [AvisoDeCursoResponse(**{**a, "creado_en": fecha_a_iso(a["creado_en"])}) for a in aula.avisos_del_curso(db, curso.id)]
+
+
+@router.post("/{curso_id}/avisos", response_model=AvisoDeCursoResponse, status_code=status.HTTP_201_CREATED, summary="Escribirle un aviso al curso")
+def publicar_aviso(
+    curso_id: int, data: AvisoDeCursoRequest, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)
+) -> AvisoDeCursoResponse:
+    """Un mensaje corto para los alumnos (la consigna, el enlace de la clase en vivo). Se leen en su pantalla; no hay forma de responder."""
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    try:
+        aviso = aula.publicar_aviso(db, curso.id, facilitador_id, data.texto, data.enlace)
+    except aula.ErrorAula as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    autor = get_user_by_id(db, facilitador_id)
+    return AvisoDeCursoResponse(id=aviso.id, texto=aviso.texto, enlace=aviso.enlace, creado_en=fecha_a_iso(aviso.creado_en), autor=autor.nombre if autor else None)
+
+
+@router.delete("/{curso_id}/avisos/{aviso_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Borrar un aviso del curso")
+def borrar_aviso(curso_id: int, aviso_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)) -> Response:
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    if not aula.borrar_aviso(db, curso.id, aviso_id):
+        raise HTTPException(status_code=404, detail="No existe ese aviso")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/{curso_id}/tareas", response_model=list[TareaDelDocenteResponse], summary="Las tareas del curso con el avance de cada alumno")
+def tareas_del_curso(curso_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)) -> list[TareaDelDocenteResponse]:
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    return [TareaDelDocenteResponse(**{**t, "desde": fecha_a_iso(t["desde"]), "hasta": fecha_a_iso(t["hasta"])}) for t in aula.tareas_con_resultados(db, curso.id)]
+
+
+@router.post("/{curso_id}/tareas", response_model=TareaDelDocenteResponse, status_code=status.HTTP_201_CREATED, summary="Ponerle una tarea al curso")
+def crear_tarea(
+    curso_id: int, data: TareaDeCursoRequest, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)
+) -> TareaDelDocenteResponse:
+    """Una meta con fecha límite que el sistema mide solo con lo que los alumnos juegan (partidas contra la IA, contra compañeros o una precisión)."""
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    try:
+        tarea = aula.crear_tarea(db, curso.id, facilitador_id, data.titulo, data.tipo, data.meta, data.dias)
+    except aula.ErrorAula as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    nueva = next(t for t in aula.tareas_con_resultados(db, curso.id) if t["id"] == tarea.id)
+    return TareaDelDocenteResponse(**{**nueva, "desde": fecha_a_iso(nueva["desde"]), "hasta": fecha_a_iso(nueva["hasta"])})
+
+
+@router.delete("/{curso_id}/tareas/{tarea_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Borrar una tarea del curso")
+def borrar_tarea(curso_id: int, tarea_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)) -> Response:
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    if not aula.borrar_tarea(db, curso.id, tarea_id):
+        raise HTTPException(status_code=404, detail="No existe esa tarea")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{curso_id}/estudiantes/crear",
+    response_model=CrearAlumnosResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Crear las cuentas de los alumnos que no tienen correo (docente)",
+)
+def crear_cuentas_de_alumnos(
+    curso_id: int, data: CrearAlumnosRequest, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)
+) -> CrearAlumnosResponse:
+    """Crea una cuenta por alumno, ya inscripta en el curso, con un usuario y una clave temporal que se ven esta única vez. Todo o nada: si algo no sirve (el cupo, el
+    plan de la institución, un teléfono), no se crea ninguna. El alumno entra escribiendo su usuario y la clave, y puede cambiarla desde su perfil."""
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    try:
+        creadas = cuentas_de_alumnos.crear_alumnos(db, curso, [a.model_dump() for a in data.alumnos])
+    except ErrorCurso as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    auditar(db, facilitador_id, "curso.crear_cuentas", "curso", curso.id, f"cantidad={len(creadas)}")
+    return CrearAlumnosResponse(cuentas=[CuentaCreadaResponse(**c) for c in creadas], dominio=cuentas_de_alumnos.DOMINIO_DE_ALUMNOS)
+
+
+@router.post(
+    "/{curso_id}/estudiantes/{usuario_id}/restablecer-clave",
+    response_model=ClaveRestablecidaResponse,
+    summary="Restablecer la clave de un alumno (docente)",
+)
+def restablecer_clave_del_alumno(
+    curso_id: int, usuario_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)
+) -> ClaveRestablecidaResponse:
+    """Restablece una cuenta gestionada por el docente. Las cuentas personales recuperan su clave por correo."""
+    curso = _del_facilitador(db, curso_id, facilitador_id)
+    inscripto = next((item for item in cursos.estudiantes_del_curso(db, curso) if item["usuario"].id == usuario_id), None)
+    if inscripto is None:
+        raise HTTPException(status_code=404, detail="Ese alumno no está en este curso")
+    alumno = inscripto["usuario"]
+    try:
+        clave = cuentas_de_alumnos.restablecer_clave(db, alumno)
+    except cursos.ErrorCurso as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    auditar(db, facilitador_id, "usuario.restablecer_clave", "usuario", alumno.id)
+    return ClaveRestablecidaResponse(usuario=cuentas_de_alumnos.usuario_de_correo(alumno.email) or alumno.email, password=clave)

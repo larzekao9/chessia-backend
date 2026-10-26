@@ -32,6 +32,13 @@ class RegistroRequest(BaseModel):
     password: str = Field(max_length=100)
     rol: Rol = "jugador"
     clave_facilitador: str | None = None
+    edad: int | None = Field(default=None, ge=0, le=120)
+    """La edad del jugador. La web la pide siempre; la app móvil todavía no, así que es opcional (sin edad, el jugador no juega con otras personas hasta cargarla)."""
+    tutor_nombre: str | None = Field(default=None, max_length=100)
+    tutor_telefono: str | None = Field(default=None, max_length=30)
+    tutor_email: EmailStr | None = None
+    autorizacion_tutor: bool = False
+    """El jugador declara que su madre, su padre o su tutor autorizó el uso: exige `tutor_nombre` y `tutor_telefono`."""
 
     @field_validator("password")
     @classmethod
@@ -91,6 +98,11 @@ class UsuarioResponse(BaseModel):
     nivel_estimado: int | None = None
     rango_estimado: str | None = None
     edad: int | None = None
+    es_menor: bool | None = None
+    """`True` si tiene menos de 18 años; `None` si no se sabe su edad."""
+    tutor_nombre: str | None = None
+    tutor_telefono: str | None = None
+    tutor_email: str | None = None
     descripcion: str | None = None
     preset_ensenanza: str | None = None
     diagnostico_completado: bool = False
@@ -99,6 +111,11 @@ class UsuarioResponse(BaseModel):
     activo: bool = True
     es_principal: bool = False
     es_admin_institucion: bool = False
+    tiene_vista_alternativa: bool = False
+    """`True` si la cuenta tiene otra vista a la que se pasa con un botón (director de prueba <-> su jugador de prueba)."""
+    doble_factor_activo: bool = False
+    doble_factor_obligatorio: bool = False
+    """`True` si el servidor lo exige a esta cuenta (plataforma o administrador de institución): sin activarlo no puede usar sus funciones."""
     correo_verificado: bool = True
     """`False` mientras falta confirmar el correo con el código que se manda al registrarse (solo si el servidor envía correos)."""
     tiene_password: bool = True
@@ -131,8 +148,12 @@ class EditarUsuarioRequest(BaseModel):
 class GenerarCodigoRequest(BaseModel):
     """Cuerpo para POST /auth/codigos-facilitador: cuánto dura el código y, opcional, para quién es."""
 
-    minutos: int = Field(default=15, ge=1, le=24 * 60)
+    minutos: int = Field(default=15, ge=1, le=7 * 24 * 60)
     para: str | None = Field(default=None, max_length=100)
+    institucion_id: int | None = None
+    """La institución a la que queda ligada quien se registre con el código. El administrador de una institución solo puede usar la suya."""
+    como_administrador: bool = False
+    """Solo la plataforma: quien se registre queda como administrador de la institución (que todavía no puede tener uno)."""
 
 
 class VerificarCodigoRequest(BaseModel):
@@ -146,6 +167,10 @@ class VerificarCodigoResponse(BaseModel):
 
     valido: bool
     segundos_restantes: int | None = None
+    institucion_nombre: str | None = None
+    como_administrador: bool = False
+    es_evaluacion: bool = False
+    """Si es de una institución: su nombre y si quien se registre queda como administrador (y, en una evaluación, con un jugador de prueba)."""
 
 
 class CodigoGeneradoResponse(BaseModel):
@@ -156,6 +181,10 @@ class CodigoGeneradoResponse(BaseModel):
     minutos: int
     expira_en: str
     para: str | None = None
+    institucion_id: int | None = None
+    institucion_nombre: str | None = None
+    como_administrador: bool = False
+    es_evaluacion: bool = False
 
 
 class CodigoInvitacionResponse(BaseModel):
@@ -168,6 +197,50 @@ class CodigoInvitacionResponse(BaseModel):
     expira_en: str
     usado_en: str | None = None
     usado_por: str | None = None
+    institucion_id: int | None = None
+    institucion_nombre: str | None = None
+    como_administrador: bool = False
+    es_evaluacion: bool = False
+
+
+class LoginPaso2Response(BaseModel):
+    """Respuesta de POST /auth/login cuando la cuenta tiene la verificación en dos pasos: todavía no hay sesión, falta el código de la app."""
+
+    requiere_2fa: bool = True
+    token_2fa: str
+
+
+class Login2faRequest(BaseModel):
+    """Cuerpo de POST /auth/login/2fa: la constancia del paso 1 y el código de 6 dígitos de la app (o uno de respaldo)."""
+
+    token_2fa: str = Field(max_length=2000)
+    codigo: str = Field(min_length=1, max_length=30)
+
+
+class CodigoDobleFactorRequest(BaseModel):
+    """Un código de la app de códigos (6 dígitos) o de respaldo."""
+
+    codigo: str = Field(min_length=1, max_length=30)
+
+
+class DesactivarDobleFactorRequest(BaseModel):
+    """Para desactivar hay que volver a probar quién es: la contraseña (si la cuenta tiene) y un código."""
+
+    password: str | None = Field(default=None, max_length=100)
+    codigo: str = Field(min_length=1, max_length=30)
+
+
+class PrepararDobleFactorResponse(BaseModel):
+    """Lo que muestra la pantalla para vincular la app: el secreto escrito (clave de configuración) y el enlace que dibuja el QR."""
+
+    secreto: str
+    uri: str
+
+
+class ActivarDobleFactorResponse(BaseModel):
+    """Los códigos de respaldo: se muestran una sola vez."""
+
+    codigos_respaldo: list[str]
 
 
 class VerificarCorreoRequest(BaseModel):
@@ -224,6 +297,54 @@ class ActualizarPerfilRequest(BaseModel):
     edad: int | None = Field(default=None, ge=0, le=120)
     descripcion: str | None = Field(default=None, max_length=1000)
     preset_ensenanza: PresetEnsenanza | None = None
+    tutor_nombre: str | None = Field(default=None, max_length=100)
+    tutor_telefono: str | None = Field(default=None, max_length=30)
+    tutor_email: EmailStr | None = None
+    autorizacion_tutor: bool | None = None
+    """`True` declara que el tutor autorizó el uso (exige nombre y teléfono); `False` retira la declaración."""
+
+
+class AutorizacionResponse(BaseModel):
+    """Si el jugador puede jugar con otras personas y qué le falta (ver `servicio_autorizacion`)."""
+
+    estado: str  # no_aplica | adulto | institucional | familia | falta_edad | falta_tutor
+    puede_jugar_con_otros: bool
+    es_menor: bool | None = None
+    falta: list[str] = []
+    mensaje: str | None = None
+    tutor_nombre: str | None = None
+    tutor_telefono: str | None = None
+    tutor_email: str | None = None
+
+
+class CambiarPasswordRequest(BaseModel):
+    """Cuerpo de POST /auth/me/cambiar-password: la clave actual y la nueva (8 o más, con letras y números)."""
+
+    password_actual: str = Field(max_length=100)
+    password_nueva: str = Field(max_length=100)
+
+    @field_validator("password_nueva")
+    @classmethod
+    def _nueva_segura(cls, valor: str) -> str:
+        return validar_password_nueva(valor)
+
+
+class RecuperarPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ConfirmarRecuperacionRequest(RecuperarPasswordRequest):
+    codigo: str = Field(pattern=r"^[0-9]{6}$")
+    password_nueva: str = Field(max_length=100)
+
+    @field_validator("password_nueva")
+    @classmethod
+    def _nueva_segura(cls, valor: str) -> str:
+        return validar_password_nueva(valor)
+
+
+class RecuperacionResponse(BaseModel):
+    mensaje: str
 
 
 class AuthResponse(BaseModel):

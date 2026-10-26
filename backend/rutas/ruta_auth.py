@@ -5,7 +5,7 @@ import logging
 from functools import lru_cache
 from typing import Iterator
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -15,10 +15,16 @@ from backend.database import DATABASE_URL, crear_fabrica_sesiones, crear_tablas,
 from backend.esquemas.institucion_esquema import InstitucionResumenResponse
 from backend.esquemas.auth_esquema import (
     ActualizarPerfilRequest,
+    AutorizacionResponse,
+    CambiarPasswordRequest,
+    RecuperarPasswordRequest,
+    ConfirmarRecuperacionRequest,
+    RecuperacionResponse,
     CodigoGeneradoResponse,
     CodigoInvitacionResponse,
     EditarUsuarioRequest,
     EliminarMiCuentaRequest,
+    LoginPaso2Response,
     EnvioCodigoResponse,
     VerificarCorreoRequest,
     EliminarUsuarioResponse,
@@ -36,7 +42,7 @@ from backend.esquemas.auth_esquema import (
 )
 from backend.esquemas.calibracion_esquema import NivelJugadorResponse
 from backend.esquemas.usuario_esquema import HistorialPartidasResponse
-from backend.modelos.tablas_orm import PartidaORM, UsuarioORM
+from backend.modelos.tablas_orm import InstitucionORM, PartidaORM, UsuarioORM
 from backend.servicios.auth import (
     actualizar_nivel_estimado,
     actualizar_perfil,
@@ -58,11 +64,12 @@ from backend.servicios.calibracion import (
     contar_calibraciones_por_usuario,
     estado_nivel_jugador,
 )
-from backend.servicios.auth.servicio_auth import ACCESS_TOKEN_EXPIRE_MINUTES, create_refresh_token
+from backend.servicios.auth.servicio_auth import ACCESS_TOKEN_EXPIRE_MINUTES, create_refresh_token, version_token_vigente
 from backend.servicios.auth.servicio_invitaciones import (
     MENSAJE_CODIGO_INVALIDO,
     generar_codigo,
     intentos_bloqueados,
+    informacion_de_codigo,
     listar_codigos,
     olvidar_intentos,
     registrar_intento_fallido,
@@ -70,11 +77,14 @@ from backend.servicios.auth.servicio_invitaciones import (
     verificar_codigo,
 )
 from backend.servicios.curso.servicio_cursos import es_principal
-from backend.servicios.institucion.servicio_instituciones import administra_alguna, ids_alumnos_visibles
+from backend.servicios.institucion.servicio_instituciones import administra_alguna, ids_alumnos_visibles, institucion_de
 from backend.servicios.partida.servicio_partida import eliminar_partidas_de_usuario
 from backend.servicios.auditoria import registrar as auditar
+from backend.servicios.auth import servicio_totp
+from backend.servicios.auth import servicio_recuperacion
 from backend.servicios.auth.servicio_verificacion import ErrorVerificacion, confirmar, iniciar_verificacion, reenviar
 from backend.servicios.subidas import leer_con_tope
+from backend.servicios.usuario import servicio_autorizacion as autorizacion
 from backend.servicios.usuario.servicio_avatar import TAMANO_MAXIMO_BYTES as TAMANO_MAXIMO_AVATAR_BYTES, guardar_avatar
 from backend.servicios.usuario.servicio_gestion_usuarios import (
     ErrorGestionUsuarios,
@@ -129,18 +139,31 @@ def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
         nivel_estimado=user.nivel_estimado,
         rango_estimado=user.rango_estimado,
         edad=user.edad,
+        es_menor=None if user.edad is None else user.edad < autorizacion.MAYORIA_DE_EDAD,
+        tutor_nombre=user.tutor_nombre,
+        tutor_telefono=user.tutor_telefono,
+        tutor_email=user.tutor_email,
         descripcion=user.descripcion,
         preset_ensenanza=user.preset_ensenanza,
         diagnostico_completado=partidas_calibradas >= PARTIDAS_DIAGNOSTICO,
         partidas_calibradas=partidas_calibradas,
         partidas_diagnostico=PARTIDAS_DIAGNOSTICO,
         activo=user.activo,
+        doble_factor_activo=bool(user.totp_activo),
+        doble_factor_obligatorio=bool(
+            servicio_totp.obligatorio_en_el_servidor()
+            and user.rol == "facilitador"
+            and (es_principal(user) or (institucion is not None and not institucion.es_prueba and institucion.administrador_id == user.id))
+        ),
+        tiene_vista_alternativa=user.cuenta_vinculada_id is not None,
         correo_verificado=bool(user.correo_verificado),
         tiene_password=bool(user.password_hash),
         es_principal=es_principal(user),
         es_admin_institucion=institucion is not None and institucion.administrador_id == user.id,
         institucion=(
-            InstitucionResumenResponse(id=institucion.id, nombre=institucion.nombre, tipo=institucion.tipo) if institucion else None
+            InstitucionResumenResponse(id=institucion.id, nombre=institucion.nombre, tipo=institucion.tipo, es_prueba=institucion.es_prueba)
+            if institucion
+            else None
         ),
     )
 
@@ -158,19 +181,36 @@ def _exigir_intentos_disponibles(cliente: str) -> None:
         )
 
 
-def get_current_user(
+def get_current_user_sin_exigir_2fa(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
 ) -> int:
-    """Extrae y valida el access token, retorna user_id."""
+    """Extrae y valida el access token, retorna user_id. NO exige la verificación en dos pasos: es para lo que hace falta antes de
+    activarla (`/auth/me` y las rutas de `/auth/2fa`). Todo lo demás usa `get_current_user`."""
     if not credentials:
         raise HTTPException(status_code=401, detail="Token requerido")
     user_id = decode_and_validate_access_token(credentials.credentials)
     if not user_id:
         raise HTTPException(status_code=401, detail="Token inválido o expirado")
     user = get_user_by_id(db, user_id)
-    if not user or not user.activo:
+    if not user or not user.activo or not version_token_vigente(credentials.credentials, user):
         raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
+    return user_id
+
+
+def _exigir_doble_factor(db: Session, usuario) -> None:
+    """403 si el servidor exige la verificación en dos pasos (`DOBLE_FACTOR_OBLIGATORIO`) a esta cuenta (la plataforma o el administrador
+    de una institución) y todavía no la activó. Hasta entonces solo puede ver `/auth/me` y activarla."""
+    if not servicio_totp.obligatorio_en_el_servidor() or usuario is None or usuario.totp_activo or usuario.rol != "facilitador":
+        return
+    # Una institución de prueba (alguien que evalúa el sistema) no obliga al doble factor: recién cuando es cliente.
+    if es_principal(usuario) or administra_alguna(db, usuario.id, incluir_prueba=False):
+        raise HTTPException(status_code=403, detail="Activá la verificación en dos pasos en Mi Perfil para usar el sistema")
+
+
+def get_current_user(user_id: int = Depends(get_current_user_sin_exigir_2fa), db: Session = Depends(get_db)) -> int:
+    """El usuario autenticado, exigiendo la verificación en dos pasos si el servidor la pide a su cuenta (ver `_exigir_doble_factor`)."""
+    _exigir_doble_factor(db, get_user_by_id(db, user_id))
     return user_id
 
 
@@ -189,7 +229,7 @@ def get_current_user_opcional(
     if not user_id:
         raise HTTPException(status_code=401, detail="Token inválido o expirado")
     user = get_user_by_id(db, user_id)
-    if not user or not user.activo:
+    if not user or not user.activo or not version_token_vigente(credentials.credentials, user):
         raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
     return user_id
 
@@ -199,6 +239,17 @@ def get_current_facilitador(
     db: Session = Depends(get_db),
 ) -> int:
     """Verifica que el usuario autenticado tenga rol facilitador."""
+    user = get_user_by_id(db, user_id)
+    if not user or user.rol != "facilitador":
+        raise HTTPException(status_code=403, detail="Acceso solo para facilitadores")
+    return user_id
+
+
+def get_current_facilitador_sin_exigir_2fa(
+    user_id: int = Depends(get_current_user_sin_exigir_2fa),
+    db: Session = Depends(get_db),
+) -> int:
+    """Como `get_current_facilitador`, pero sin exigir el doble factor: para poder activarlo."""
     user = get_user_by_id(db, user_id)
     if not user or user.rol != "facilitador":
         raise HTTPException(status_code=403, detail="Acceso solo para facilitadores")
@@ -236,11 +287,22 @@ def get_current_admin_institucion(
 )
 def registro(data: RegistroRequest, solicitud: Request, db: Session = Depends(get_db)) -> AuthResponse:
     """Registra un nuevo usuario y devuelve tokens de acceso."""
+    if str(data.email).lower().endswith("@alumnos.example.com"):
+        raise HTTPException(status_code=400, detail="Las cuentas sin correo las crea el docente desde su curso.")
     if get_user_by_email(db, data.email):
         raise HTTPException(status_code=400, detail="Email ya registrado")
     cliente = _cliente_de(solicitud)
     if data.rol == "facilitador" and data.clave_facilitador:
         _exigir_intentos_disponibles(cliente)
+    # Los datos de la edad y del tutor se revisan ANTES de crear la cuenta: no queda una cuenta a medias si algo no sirve.
+    try:
+        edad = autorizacion.validar_edad(data.edad)
+        autorizacion.normalizar_nombre_tutor(data.tutor_nombre)
+        autorizacion.normalizar_telefono(data.tutor_telefono)
+        if data.autorizacion_tutor and not (data.tutor_nombre and data.tutor_nombre.strip() and data.tutor_telefono and data.tutor_telefono.strip()):
+            raise autorizacion.ErrorAutorizacion("Para declarar la autorización hacen falta el nombre y el teléfono de la madre, el padre o el tutor.")
+    except autorizacion.ErrorAutorizacion as e:
+        raise HTTPException(status_code=e.estado, detail=str(e))
 
     try:
         user = create_user(
@@ -255,6 +317,11 @@ def registro(data: RegistroRequest, solicitud: Request, db: Session = Depends(ge
         if data.clave_facilitador and str(e) == MENSAJE_CODIGO_INVALIDO:
             registrar_intento_fallido(cliente)
         raise HTTPException(status_code=400, detail=str(e))
+    if user.rol == "jugador" and (edad is not None or data.tutor_nombre or data.tutor_telefono or data.tutor_email):
+        user.edad = edad
+        autorizacion.guardar_datos_del_tutor(user, data.tutor_nombre, data.tutor_telefono, True if data.autorizacion_tutor else None, email=data.tutor_email)
+        db.commit()
+        db.refresh(user)
 
     iniciar_verificacion(db, user)  # solo si el servidor puede mandar correos: manda el código y deja la cuenta sin verificar
     access, refresh = create_tokens(user)
@@ -337,10 +404,10 @@ def login_google(data: GoogleAuthRequest, solicitud: Request, db: Session = Depe
 
 @router.post(
     "/login",
-    response_model=AuthResponse,
+    response_model=AuthResponse | LoginPaso2Response,
     summary="Iniciar sesión",
 )
-def login(data: LoginRequest, solicitud: Request, db: Session = Depends(get_db)) -> AuthResponse:
+def login(data: LoginRequest, solicitud: Request, db: Session = Depends(get_db)) -> AuthResponse | LoginPaso2Response:
     """Autentica usuario y devuelve tokens de acceso.
 
     Si el cliente manda `rol_esperado` (la app móvil manda `jugador`) y la
@@ -355,6 +422,9 @@ def login(data: LoginRequest, solicitud: Request, db: Session = Depends(get_db))
         registrar_intento_fallido(clave_intentos)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
     olvidar_intentos(clave_intentos)
+    if user.totp_activo:
+        # Contraseña correcta, pero falta el código de la app: todavía no se entrega ninguna sesión.
+        return LoginPaso2Response(token_2fa=servicio_totp.crear_token_de_paso_2(user.id, user.version_credenciales))
     if data.rol_esperado is not None and user.rol != data.rol_esperado:
         raise HTTPException(
             status_code=403,
@@ -385,10 +455,10 @@ def refresh(data: RefreshRequest, db: Session = Depends(get_db)) -> TokenRespons
         raise HTTPException(status_code=401, detail="Refresh token inválido o expirado")
 
     user = get_user_by_id(db, user_id)
-    if not user or not user.activo:
+    if not user or not user.activo or not version_token_vigente(data.refresh_token, user):
         raise HTTPException(status_code=401, detail="Usuario no encontrado o inactivo")
 
-    payload = {"sub": str(user.id), "email": user.email, "rol": user.rol}
+    payload = {"sub": str(user.id), "email": user.email, "rol": user.rol, "cv": user.version_credenciales or 0}
     return TokenResponse(
         access_token=create_access_token(payload),
         refresh_token=create_refresh_token(payload),
@@ -401,7 +471,7 @@ def refresh(data: RefreshRequest, db: Session = Depends(get_db)) -> TokenRespons
     response_model=UsuarioResponse,
     summary="Datos del usuario autenticado",
 )
-def me(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> UsuarioResponse:
+def me(user_id: int = Depends(get_current_user_sin_exigir_2fa), db: Session = Depends(get_db)) -> UsuarioResponse:
     """Retorna datos del usuario actual (requiere access token válido)."""
     user = get_user_by_id(db, user_id)
     if not user:
@@ -477,8 +547,67 @@ def actualizar_perfil_propio(
     if not user:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     campos = data.model_dump(exclude_unset=True)
+    tutor = {clave: campos.pop(clave) for clave in ("tutor_nombre", "tutor_telefono", "tutor_email", "autorizacion_tutor") if clave in campos}
+    try:
+        if "edad" in campos:
+            autorizacion.validar_edad(campos["edad"])
+        if tutor:
+            autorizacion.guardar_datos_del_tutor(
+                user, tutor.get("tutor_nombre"), tutor.get("tutor_telefono"), tutor.get("autorizacion_tutor"), campos_presentes=set(tutor), email=tutor.get("tutor_email")
+            )
+    except autorizacion.ErrorAutorizacion as e:
+        db.rollback()
+        raise HTTPException(status_code=e.estado, detail=str(e))
     user = actualizar_perfil(db, user, campos)
     return _a_respuesta(user, contar_calibraciones(db, user.id))
+
+
+@router.get("/me/autorizacion", response_model=AutorizacionResponse, summary="Si puedo jugar con otras personas y qué me falta")
+def mi_autorizacion(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> AutorizacionResponse:
+    """Si el jugador puede jugar con otras personas (es mayor de edad, su curso está autorizado o su familia lo autorizó) y, si no, qué le falta cargar."""
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return AutorizacionResponse(**autorizacion.estado_de_autorizacion(db, user))
+
+
+@router.post("/me/cambiar-password", response_model=TokenResponse, summary="Cambiar mi contraseña")
+def cambiar_password(data: CambiarPasswordRequest, user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> TokenResponse:
+    """Cambia la contraseña de quien la tiene (una cuenta que entra solo con Google no tiene). Pide la actual: 400 si no coincide."""
+    from backend.servicios.auth.servicio_auth import hash_password, verify_password
+
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if not user.password_hash:
+        raise HTTPException(status_code=400, detail="Tu cuenta entra con Google: no tiene una contraseña para cambiar.")
+    if not verify_password(data.password_actual, user.password_hash):
+        raise HTTPException(status_code=400, detail="La contraseña actual no es correcta.")
+    user.password_hash = hash_password(data.password_nueva)
+    user.version_credenciales += 1
+    user.recuperacion_password_hash = None
+    user.recuperacion_password_expira = None
+    db.commit()
+    access, refresh_token = create_tokens(user)
+    return TokenResponse(access_token=access, refresh_token=refresh_token, expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+
+
+@router.post("/recuperar-password", response_model=RecuperacionResponse, summary="Pedir un código para recuperar mi cuenta personal")
+def pedir_recuperacion(data: RecuperarPasswordRequest, solicitud: Request, db: Session = Depends(get_db)) -> RecuperacionResponse:
+    try:
+        servicio_recuperacion.solicitar(db, str(data.email), _cliente_de(solicitud))
+    except ErrorVerificacion as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    return RecuperacionResponse(mensaje=servicio_recuperacion.MENSAJE_SOLICITUD)
+
+
+@router.post("/recuperar-password/confirmar", status_code=204, summary="Cambiar mi contraseña con el código enviado al correo")
+def confirmar_recuperacion(data: ConfirmarRecuperacionRequest, solicitud: Request, db: Session = Depends(get_db)) -> Response:
+    try:
+        servicio_recuperacion.confirmar(db, str(data.email), data.codigo, data.password_nueva, _cliente_de(solicitud))
+    except ErrorVerificacion as error:
+        raise HTTPException(status_code=error.estado, detail=str(error)) from error
+    return Response(status_code=204)
 
 
 @router.post(
@@ -544,40 +673,117 @@ def verificar_codigo_facilitador(
     azar, cada cliente tiene un número limitado de intentos fallidos: pasado el límite responde 429."""
     cliente = _cliente_de(solicitud)
     _exigir_intentos_disponibles(cliente)
-    segundos = verificar_codigo(db, data.codigo)
-    if segundos is None:
+    informacion = informacion_de_codigo(db, data.codigo)
+    if informacion is None:
         registrar_intento_fallido(cliente)
         return VerificarCodigoResponse(valido=False)
-    return VerificarCodigoResponse(valido=True, segundos_restantes=segundos)
+    return VerificarCodigoResponse(valido=True, **informacion)
+
+
+@router.post(
+    "/cambiar-vista",
+    response_model=AuthResponse,
+    summary="Pasar de la vista de director de prueba a su jugador de prueba, y volver",
+)
+def cambiar_vista(user_id: int = Depends(get_current_user), db: Session = Depends(get_db)) -> AuthResponse:
+    """Solo para el modo evaluación: quien prueba el sistema tiene una cuenta de director y una de jugador de prueba, vinculadas entre sí. Devuelve
+    la sesión de la otra cuenta. 400 si la cuenta no tiene vista alternativa; 403 si la otra cuenta tiene verificación en dos pasos (ahí hay
+    que iniciar sesión de nuevo, para no saltearla)."""
+    usuario = get_user_by_id(db, user_id)
+    destino = get_user_by_id(db, usuario.cuenta_vinculada_id) if usuario.cuenta_vinculada_id is not None else None
+    if destino is None or not destino.activo or destino.cuenta_vinculada_id != usuario.id:
+        raise HTTPException(status_code=400, detail="Tu cuenta no tiene otra vista")
+    if destino.totp_activo:
+        raise HTTPException(status_code=403, detail="Esa cuenta tiene verificación en dos pasos: cerrá sesión y entrá con ella")
+    acceso, renovacion = create_tokens(destino)
+    return AuthResponse(
+        usuario=_a_respuesta(destino, contar_calibraciones(db, destino.id)),
+        tokens=TokenResponse(access_token=acceso, refresh_token=renovacion, expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60),
+    )
+
+
+def eliminar_par_de_prueba(db: Session, usuario) -> None:
+    """Si `usuario` es un facilitador en evaluación, borra su cuenta de jugador de prueba con todo lo suyo (partidas, medallas, curso…)."""
+    if usuario.cuenta_vinculada_id is None or usuario.rol != "facilitador":
+        return
+    par = get_user_by_id(db, usuario.cuenta_vinculada_id)
+    if par is not None and par.rol == "jugador":
+        eliminar_partidas_de_usuario(par.id)
+        eliminar_usuario(db, par, usuario.id)
+
+
+def _alcance_de_invitaciones(db: Session, solicitante_id: int) -> int | None:
+    """`None` para la plataforma (ve y anula todos los códigos); para el administrador de una institución, el id de la suya."""
+    solicitante = get_user_by_id(db, solicitante_id)
+    if es_principal(solicitante):
+        return None
+    propia = institucion_de(db, solicitante)
+    return propia.id if propia is not None else -1  # sin institución no ve ninguno
 
 
 @router.post(
     "/codigos-facilitador",
     response_model=CodigoGeneradoResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Generar un código de invitación para un nuevo facilitador (solo la plataforma)",
+    summary="Generar un código de invitación para un nuevo facilitador (la plataforma o el administrador de una institución)",
 )
 def generar_codigo_facilitador(
     data: GenerarCodigoRequest,
-    solicitante_id: int = Depends(get_current_principal),
+    solicitante_id: int = Depends(get_current_admin_institucion),
     db: Session = Depends(get_db),
 ) -> CodigoGeneradoResponse:
     """Genera un código de un solo uso que vence a los `minutos` indicados (15 por defecto). La persona nueva lo
-    escribe al registrarse como facilitador. El código se devuelve una única vez: no se puede volver a ver."""
-    fila, codigo = generar_codigo(db, solicitante_id, data.minutos, data.para)
-    auditar(db, solicitante_id, "codigo.generar", "codigo_invitacion", fila.id, f"vence en {data.minutos} min")
+    escribe al registrarse como facilitador. El código se devuelve una única vez: no se puede volver a ver.
+
+    La plataforma puede ligarlo a una institución (`institucion_id`), y así quien se registre queda dentro de ella, y hasta dejarlo como
+    su administrador (`como_administrador`, si la institución todavía no tiene uno). El administrador de una institución solo genera
+    códigos para docentes de la suya: no puede elegir otra ni invitar administradores."""
+    solicitante = get_user_by_id(db, solicitante_id)
+    institucion_id = data.institucion_id
+    if not es_principal(solicitante):
+        propia = institucion_de(db, solicitante)
+        if propia is None or (institucion_id is not None and institucion_id != propia.id):
+            raise HTTPException(status_code=403, detail="Solo podés invitar docentes a tu propia institución")
+        if data.como_administrador:
+            raise HTTPException(status_code=403, detail="Solo la plataforma puede invitar a un administrador")
+        institucion_id = propia.id
+    institucion = db.get(InstitucionORM, institucion_id) if institucion_id is not None else None
+    if institucion_id is not None and institucion is None:
+        raise HTTPException(status_code=404, detail="No existe esa institución")
+    if data.como_administrador:
+        if institucion is None:
+            raise HTTPException(status_code=400, detail="Para invitar a un administrador elegí la institución")
+        if institucion.administrador_id is not None:
+            raise HTTPException(status_code=400, detail="Esa institución ya tiene administrador")
+    try:
+        fila, codigo = generar_codigo(
+            db, solicitante_id, data.minutos, data.para, institucion_id=institucion_id, como_administrador=data.como_administrador
+        )
+    except ValueError as error:  # duración fuera de rango (un código sin institución dura hasta 24 horas)
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    detalle = f"vence en {data.minutos} min" + (
+        f", institución {institucion_id} como {'administrador' if data.como_administrador else 'docente'}" if institucion_id else ""
+    )
+    auditar(db, solicitante_id, "codigo.generar", "codigo_invitacion", fila.id, detalle)
     return CodigoGeneradoResponse(
-        id=fila.id, codigo=codigo, minutos=data.minutos, expira_en=fecha_a_iso(fila.expira_en), para=fila.para
+        id=fila.id,
+        codigo=codigo,
+        minutos=data.minutos,
+        expira_en=fecha_a_iso(fila.expira_en),
+        para=fila.para,
+        institucion_id=institucion_id,
+        institucion_nombre=institucion.nombre if institucion else None,
+        como_administrador=fila.como_administrador,
     )
 
 
 @router.get(
     "/codigos-facilitador",
     response_model=list[CodigoInvitacionResponse],
-    summary="Códigos de invitación generados, con su estado (solo la plataforma)",
+    summary="Códigos de invitación generados, con su estado (la plataforma, todos; un administrador, los de su institución)",
 )
 def listar_codigos_facilitador(
-    _: int = Depends(get_current_principal),
+    solicitante_id: int = Depends(get_current_admin_institucion),
     db: Session = Depends(get_db),
 ) -> list[CodigoInvitacionResponse]:
     """Los últimos códigos con su estado (vigente, usado o vencido) y quién los usó. No incluye su valor."""
@@ -590,8 +796,11 @@ def listar_codigos_facilitador(
             expira_en=fecha_a_iso(c["expira_en"]),
             usado_en=fecha_a_iso(c["usado_en"]) if c["usado_en"] else None,
             usado_por=c["usado_por"],
+            institucion_id=c["institucion_id"],
+            institucion_nombre=c["institucion_nombre"],
+            como_administrador=c["como_administrador"],
         )
-        for c in listar_codigos(db)
+        for c in listar_codigos(db, institucion_id=_alcance_de_invitaciones(db, solicitante_id))
     ]
 
 
@@ -602,11 +811,12 @@ def listar_codigos_facilitador(
 )
 def anular_codigo_facilitador(
     codigo_id: int,
-    solicitante_id: int = Depends(get_current_principal),
+    solicitante_id: int = Depends(get_current_admin_institucion),
     db: Session = Depends(get_db),
 ) -> None:
-    """Borra un código sin usar, por ejemplo si se lo dio a la persona equivocada. 404 si no existe o ya se usó."""
-    if not revocar_codigo(db, codigo_id):
+    """Borra un código sin usar, por ejemplo si se lo dio a la persona equivocada. 404 si no existe, ya se usó o (para el administrador de
+    una institución) es de otra."""
+    if not revocar_codigo(db, codigo_id, institucion_id=_alcance_de_invitaciones(db, solicitante_id)):
         raise HTTPException(status_code=404, detail="Código no encontrado o ya usado")
     auditar(db, solicitante_id, "codigo.anular", "codigo_invitacion", codigo_id)
 
@@ -660,6 +870,7 @@ def eliminar_usuario_ruta(
     try:
         # Primero se validan las reglas sin tocar nada; recién después se borran las partidas y la cuenta.
         validar_eliminacion(db, objetivo, solicitante_id)
+        eliminar_par_de_prueba(db, objetivo)
         partidas = eliminar_partidas_de_usuario(usuario_id)
         borradas = eliminar_usuario(db, objetivo, solicitante_id)
     except ErrorGestionUsuarios as error:
@@ -688,7 +899,7 @@ def eliminar_mi_cuenta(
     clave_intentos = f"baja:{_cliente_de(solicitud)}:{usuario_id}"
     if intentos_bloqueados(clave_intentos):
         raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Esperá unos minutos y volvé a probar.")
-    if usuario.password_hash:
+    if usuario.password_hash and not usuario.google_id:
         confirmado = bool(data.password) and verify_password(data.password, usuario.password_hash)
         pista = "La contraseña no es correcta"
     else:
@@ -700,6 +911,7 @@ def eliminar_mi_cuenta(
     rol_usuario = usuario.rol
     try:
         validar_eliminacion(db, usuario, usuario_id, propia=True)
+        eliminar_par_de_prueba(db, usuario)
         partidas = eliminar_partidas_de_usuario(usuario_id)
         borradas = eliminar_usuario(db, usuario, usuario_id, propia=True)
     except ErrorGestionUsuarios as error:

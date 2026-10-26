@@ -40,6 +40,11 @@ from backend.rutas.ruta_facilitador import router as facilitador_router
 from backend.rutas.ruta_curso import router as curso_router
 from backend.rutas.ruta_institucion import router as institucion_router
 from backend.rutas.ruta_auditoria import router as auditoria_router
+from backend.rutas.ruta_progreso import router as progreso_router
+from backend.rutas.ruta_social import router as social_router
+from backend.rutas.ruta_torneo import router as torneo_router
+from backend.rutas.ruta_suscripcion import router as suscripcion_router
+from backend.rutas.ruta_doble_factor import router as doble_factor_router
 from backend.rutas.ruta_medallas import router as medallas_router
 from backend.rutas.ruta_tutor import router as tutor_router
 from backend.rutas.ruta_entrenamiento import router as entrenamiento_router
@@ -108,6 +113,11 @@ app.include_router(facilitador_router)
 app.include_router(curso_router)
 app.include_router(institucion_router)
 app.include_router(auditoria_router)
+app.include_router(suscripcion_router)
+app.include_router(progreso_router)
+app.include_router(social_router)
+app.include_router(torneo_router)
+app.include_router(doble_factor_router)
 app.include_router(medallas_router)
 app.include_router(tutor_router)
 app.include_router(entrenamiento_router)

@@ -10,6 +10,7 @@ from backend.servicios.sala.servicio_sala import (
     cancelar_sala,
     sala_activa_de,
     limpiar_salas_inactivas,
+    registrar_presencia,
 )
 
 __all__ = [
@@ -23,4 +24,5 @@ __all__ = [
     "cancelar_sala",
     "sala_activa_de",
     "limpiar_salas_inactivas",
+    "registrar_presencia",
 ]

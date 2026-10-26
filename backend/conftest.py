@@ -9,6 +9,7 @@ os.environ.pop("DATABASE_URL", None)
 # ningún correo autorizado de fábrica: se configura con CORREOS_FACILITADORES). Los tests del código de
 # invitación lo quitan con monkeypatch.
 os.environ["CORREOS_FACILITADORES"] = "*@test.com"
+os.environ["PERMITIR_LOGIN_GOOGLE_DEMO"] = "true"  # Solo las pruebas usan tokens ficticios de Google.
 
 import pytest  # noqa: E402
 

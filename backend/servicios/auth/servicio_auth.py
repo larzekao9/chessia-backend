@@ -14,7 +14,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.modelos.tablas_orm import UsuarioORM
+from backend.modelos.tablas_orm import InstitucionORM, UsuarioORM
 from backend.servicios.auth.servicio_invitaciones import consumir_codigo
 
 # Configuración de hashing (bcrypt)
@@ -94,11 +94,10 @@ def login_google_demo_permitido() -> bool:
     """Indica si se aceptan tokens de prueba `demo_<correo>` / `mock_<correo>` en el login con Google.
 
     Sirven en desarrollo y en los tests, donde no hay un ID Token real de Google. En un servidor
-    publicado hay que apagarlos con `PERMITIR_LOGIN_GOOGLE_DEMO=false`: con ellos cualquiera podría
-    entrar con el correo que quisiera, incluido el de un facilitador. Si la variable no existe se
-    mantiene el comportamiento de siempre (permitidos).
+    publicado deben permanecer apagados: con ellos cualquiera podría entrar con el correo que quisiera.
+    Solo se habilitan explícitamente con `PERMITIR_LOGIN_GOOGLE_DEMO=true` en desarrollo.
     """
-    valor = os.environ.get("PERMITIR_LOGIN_GOOGLE_DEMO", "true").strip().lower()
+    valor = os.environ.get("PERMITIR_LOGIN_GOOGLE_DEMO", "false").strip().lower()
     return valor in {"1", "true", "si", "sí", "yes"}
 
 
@@ -157,6 +156,8 @@ def autenticar_o_vincular_google(
     Vincula cuenta existente si el email coincide o crea una nueva cuenta
     con política estricta de asignación de roles seguros.
     """
+    if str(google_info.get("email_verified", "")).lower() != "true":
+        raise ValueError("Google no confirmó la propiedad de ese correo")
     email = google_info["email"].lower().strip()
     sub = google_info.get("sub")
     nombre = google_info.get("name") or email.split("@")[0].title()
@@ -166,15 +167,21 @@ def autenticar_o_vincular_google(
     if sub:
         user_por_sub = db.execute(select(UsuarioORM).where(UsuarioORM.google_id == sub)).scalar_one_or_none()
         if user_por_sub:
+            if user_por_sub.email != email:
+                raise ValueError("El correo de Google cambió: contactá a la plataforma para actualizarlo")
+            user_por_sub.correo_verificado = True
+            user_por_sub.correo_verificado_en = datetime.now(timezone.utc).replace(tzinfo=None)
             if avatar and not user_por_sub.avatar_url:
                 user_por_sub.avatar_url = avatar
-                db.commit()
-                db.refresh(user_por_sub)
+            db.commit()
+            db.refresh(user_por_sub)
             return user_por_sub
 
     # 2. Si el usuario ya existe por email (Account Linking automático)
     user_por_email = get_user_by_email(db, email)
     if user_por_email:
+        user_por_email.correo_verificado = True
+        user_por_email.correo_verificado_en = datetime.now(timezone.utc).replace(tzinfo=None)
         if sub and not user_por_email.google_id:
             user_por_email.google_id = sub
         if avatar and not user_por_email.avatar_url:
@@ -193,6 +200,8 @@ def autenticar_o_vincular_google(
         password_hash=None,
         rol=rol_final,
         google_id=sub,
+        correo_verificado=True,
+        correo_verificado_en=datetime.now(timezone.utc).replace(tzinfo=None),
         avatar_url=avatar,
         activo=True,
     )
@@ -245,6 +254,27 @@ def _confirmar_alta(db: Session, usuario: UsuarioORM, codigo) -> None:
         db.flush()
         if codigo is not None:
             codigo.usado_por = usuario.id
+            if codigo.institucion_id is not None:
+                # Un código de institución deja a la persona dentro de ella; si era «como administrador» y la institución todavía no tiene
+                # uno, la deja como su administrador. Se hace con el ORM directo para no cruzar importaciones con el servicio de instituciones.
+                usuario.institucion_id = codigo.institucion_id
+                institucion = db.get(InstitucionORM, codigo.institucion_id)
+                if codigo.como_administrador and institucion is not None and institucion.administrador_id is None:
+                    institucion.administrador_id = usuario.id
+            if codigo.es_evaluacion:
+                # Modo evaluación: además de su cuenta de director, se le crea un jugador de prueba (sin contraseña: solo se entra a él con el
+                # botón «Ver como jugador») y cada cuenta queda apuntando a la otra. El correo `.invalid` está reservado y nunca existe.
+                jugador = UsuarioORM(
+                    email=f"jugador-de-prueba-{usuario.id}@chessia.invalid",
+                    nombre=f"{usuario.nombre} (jugador de prueba)",
+                    password_hash=None,
+                    rol="jugador",
+                    activo=True,
+                    cuenta_vinculada_id=usuario.id,
+                )
+                db.add(jugador)
+                db.flush()
+                usuario.cuenta_vinculada_id = jugador.id
         db.commit()
     except Exception:
         db.rollback()
@@ -319,10 +349,18 @@ def authenticate_user(db: Session, email: str, password: str) -> Optional[Usuari
 
 def create_tokens(user: UsuarioORM) -> tuple[str, str]:
     """Crea access + refresh tokens para un usuario."""
-    payload = {"sub": str(user.id), "email": user.email, "rol": user.rol}
+    payload = {"sub": str(user.id), "email": user.email, "rol": user.rol, "cv": user.version_credenciales or 0}
     access = create_access_token(payload)
     refresh = create_refresh_token(payload)
     return access, refresh
+
+
+def version_token_vigente(token: str, usuario: UsuarioORM) -> bool:
+    """Los tokens anteriores al cambio de contraseña dejan de dar acceso (incluidos los tokens previos a esta columna)."""
+    try:
+        return decode_token(token).get("cv", 0) == (usuario.version_credenciales or 0)
+    except (JWTError, ValueError):
+        return False
 
 
 def decode_and_validate_access_token(token: str) -> Optional[int]:

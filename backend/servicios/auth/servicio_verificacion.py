@@ -53,18 +53,19 @@ def _ahora() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def enviar_correo(destino: str, nombre: str, codigo: str) -> None:
+def enviar_correo(destino: str, nombre: str, codigo: str, *, recuperacion: bool = False) -> None:
     """Manda el código por SMTP (con STARTTLS si el puerto no es el 465). Lanza si el servidor de correo falla."""
     host = os.environ["SMTP_HOST"].strip()
     puerto = int(os.environ.get("SMTP_PORT", "587"))
     remitente = os.environ["SMTP_REMITENTE"].strip()
     mensaje = EmailMessage()
-    mensaje["Subject"] = "Tu código de verificación de ChessIA"
+    mensaje["Subject"] = "Recuperá tu contraseña de ChessIA" if recuperacion else "Tu código de verificación de ChessIA"
     mensaje["From"] = remitente
     mensaje["To"] = destino
+    proposito = "recuperar tu contraseña" if recuperacion else "verificar el correo"
     mensaje.set_content(
-        f"Hola {nombre},\n\nTu código para verificar el correo es: {codigo}\n\n"
-        f"Vence en {MINUTOS_DE_VIGENCIA} minutos. Si no creaste una cuenta en ChessIA, ignorá este mensaje.\n"
+        f"Hola {nombre},\n\nTu código para {proposito} es: {codigo}\n\n"
+        f"Vence en {MINUTOS_DE_VIGENCIA} minutos. Si no lo pediste, ignorá este mensaje. No compartas este código.\n"
     )
     clase = smtplib.SMTP_SSL if puerto == 465 else smtplib.SMTP
     with clase(host, puerto, timeout=15) as servidor:
@@ -76,10 +77,13 @@ def enviar_correo(destino: str, nombre: str, codigo: str) -> None:
         servidor.send_message(mensaje)
 
 
-def _enviar_en_segundo_plano(destino: str, nombre: str, codigo: str) -> None:
+def _enviar_en_segundo_plano(destino: str, nombre: str, codigo: str, *, recuperacion: bool = False) -> None:
     def tarea() -> None:
         try:
-            enviar_correo(destino, nombre, codigo)
+            if recuperacion:
+                enviar_correo(destino, nombre, codigo, recuperacion=True)
+            else:
+                enviar_correo(destino, nombre, codigo)
         except Exception:  # noqa: BLE001 — un fallo del correo no debe romper el registro; se puede reenviar
             logger.exception("No se pudo enviar el código de verificación")
 
@@ -88,10 +92,11 @@ def _enviar_en_segundo_plano(destino: str, nombre: str, codigo: str) -> None:
 
 def iniciar_verificacion(db: Session, usuario: UsuarioORM) -> None:
     """Deja la cuenta sin verificar, genera un código nuevo y lo manda al correo. No hace nada si el envío no está configurado."""
-    if not verificacion_activa():
+    if usuario.cuenta_gestionada or not verificacion_activa():
         return
     codigo = f"{secrets.randbelow(10**6):06d}"
     usuario.correo_verificado = False
+    usuario.correo_verificado_en = None
     usuario.codigo_verificacion_hash = _huella(usuario.id, codigo)
     usuario.codigo_verificacion_expira = _ahora() + timedelta(minutes=MINUTOS_DE_VIGENCIA)
     db.commit()
@@ -102,7 +107,7 @@ def iniciar_verificacion(db: Session, usuario: UsuarioORM) -> None:
 
 def reenviar(db: Session, usuario: UsuarioORM) -> None:
     """Manda un código nuevo (el anterior deja de servir). 429 si se pidió hace menos de un minuto."""
-    if usuario.correo_verificado:
+    if usuario.correo_verificado and usuario.correo_verificado_en is not None:
         raise ErrorVerificacion("Tu correo ya está verificado")
     if not verificacion_activa():
         raise ErrorVerificacion("El envío de correos no está disponible en este servidor", 503)
@@ -129,6 +134,7 @@ def confirmar(db: Session, usuario: UsuarioORM, codigo: str) -> UsuarioORM:
         registrar_intento_fallido(clave)
         raise ErrorVerificacion("El código no es correcto o ya venció. Pedí uno nuevo.")
     usuario.correo_verificado = True
+    usuario.correo_verificado_en = _ahora()
     usuario.codigo_verificacion_hash = None
     usuario.codigo_verificacion_expira = None
     db.commit()

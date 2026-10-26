@@ -187,8 +187,11 @@ def eliminar_partidas_de_usuario(usuario_id: int) -> int:
 
     Lo usa Gestión de Usuarios al eliminar una cuenta: las partidas no se pueden dejar huérfanas.
     """
-    partidas = _repositorio.listar_por_usuario(usuario_id)
-    for partida in partidas:
+    partidas = {p.id: p for p in _repositorio.listar_por_usuario(usuario_id)}
+    # Las salas entre personas en las que se sentó (sea quien las creó o quien se unió) también se borran: sus asientos apuntan a su cuenta.
+    for sala in _repositorio.listar_por_participante(usuario_id):
+        partidas.setdefault(sala.id, sala)
+    for partida in partidas.values():
         _repositorio.eliminar(partida.id)
     return len(partidas)
 

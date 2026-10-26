@@ -20,17 +20,22 @@ CANTIDAD_MOMENTOS_CLAVE = 5
 
 
 def motivo_fin(partida: Partida) -> str | None:
-    """Por qué terminó la sala: `"mate"`, `"tablas"`, `"abandono"`, `"inactividad"` o `None`.
+    """Por qué terminó la sala: `"mate"`, `"tablas"`, `"acuerdo"` (tablas aceptadas), `"abandono"`, `"tiempo"`, `"ausencia"`, `"inactividad"` o `None`.
 
     - `"abandono"`: un jugador abandonó (estado `terminada` con `resultado_por_tiempo`; hay ganador).
+    - `"tiempo"`: a un jugador se le acabó el reloj (estado `terminada`, el que perdió quedó con 0 ms).
+    - `"ausencia"`: un jugador se fue de una sala con reloj y la perdió (estado `abandonada` con `resultado_por_tiempo`; hay ganador).
     - `"inactividad"`: la sala venció por inactividad (estado `abandonada`; `resultado` es `None`).
     """
     if partida.estado == "abandonada":
-        return "inactividad"
+        return "ausencia" if partida.resultado_por_tiempo is not None else "inactividad"
     if not partida.terminada and partida.estado != "terminada":
         return None
+    if partida.resultado_por_tiempo == "1/2-1/2" and not partida.tablero.is_game_over():
+        return "acuerdo"
     if partida.resultado_por_tiempo is not None and not partida.tablero.is_game_over():
-        return "abandono"
+        sin_tiempo = partida.tiempo_negras_ms if partida.resultado_por_tiempo == "1-0" else partida.tiempo_blancas_ms
+        return "tiempo" if partida.control_tiempo_ms and sin_tiempo == 0 else "abandono"
     tablero = partida.tablero
     if tablero.is_checkmate():
         return "mate"

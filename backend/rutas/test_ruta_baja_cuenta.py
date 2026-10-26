@@ -99,3 +99,15 @@ def test_un_docente_que_se_da_de_baja_deja_sin_curso_a_sus_alumnos_pero_no_los_b
     assert _baja(cliente, docente, password="secreto1").status_code == 200
     assert _existe(fabrica, alumno["id"])
     assert cliente.get("/cursos/mio", headers=alumno["headers"]).json() is None
+
+
+def test_una_cuenta_vinculada_a_google_se_da_de_baja_escribiendo_su_correo(contexto) -> None:
+    cliente, registrar, fabrica = contexto
+    ana = registrar("ana@test.com")
+    with fabrica() as db:
+        db.get(UsuarioORM, ana["id"]).google_id = "google-de-ana"  # tiene contraseña de ChessIA, pero entra con Google
+        db.commit()
+
+    assert _baja(cliente, ana, password="secreto1").status_code == 401  # con Google no se pide esa contraseña
+    assert _baja(cliente, ana, confirmar_email="ana@test.com").status_code == 200
+    assert not _existe(fabrica, ana["id"])

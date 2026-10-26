@@ -68,6 +68,45 @@ TABLAS: dict[str, tuple[str, str]] = {
         "como facilitador. Solo se guarda su hash.",
         "En uso",
     ),
+    "suscripcion": (
+        "Suscripción de una institución: su plan (hasta 60 o hasta 120 alumnos), cuándo termina la prueba gratis (30 días por defecto) y hasta "
+        "cuándo está pagada. El estado (prueba, activa o vencida) se calcula con las fechas.",
+        "En uso",
+    ),
+    "pago": (
+        "Pago que una institución avisa haber hecho. Queda pendiente hasta que la plataforma lo confirma; recién ahí se extiende la "
+        "suscripción.",
+        "En uso",
+    ),
+    "amistad": (
+        "Amistad entre dos jugadores que no comparten curso (los compañeros de curso no la necesitan para jugar entre sí). Una solicitud queda "
+        "pendiente hasta que el destinatario la acepta; si la rechaza, la fila se borra.",
+        "En uso",
+    ),
+    "denuncia": (
+        "Denuncia de un jugador contra otro (conducta, trampa o abandonos). La revisa el docente del denunciado, el administrador de su institución o la plataforma.",
+        "En uso",
+    ),
+    "torneo": (
+        "Torneo relámpago de un curso (sistema suizo): nombre, reloj, cantidad de rondas y en qué ronda va. El docente lo arma y empareja cada ronda.",
+        "En uso",
+    ),
+    "torneo_jugador": (
+        "Jugador inscrito en un torneo, con sus puntos (1 por victoria, 0,5 por tablas, 1 por descanso).",
+        "En uso",
+    ),
+    "torneo_partida": (
+        "Una partida de una ronda de un torneo: quién juega con blancas y con negras, su sala y cómo terminó.",
+        "En uso",
+    ),
+    "aviso_curso": (
+        "Aviso de un docente a su curso (una consigna, el enlace de una clase en vivo). Es en un solo sentido: los alumnos lo leen, no responden.",
+        "En uso",
+    ),
+    "tarea_curso": (
+        "Tarea de un docente para su curso, con una meta que el sistema mide solo con lo que los alumnos juegan (partidas contra la IA, partidas entre compañeros o precisión).",
+        "En uso",
+    ),
     "auditoria": (
         "Registro de lo que hacen los administradores sobre cuentas, instituciones y códigos de invitación: quién, qué y a quién. "
         "Sin datos personales; se conserva 1 año.",
@@ -210,6 +249,12 @@ COLUMNAS: dict[tuple[str, str], str] = {
     ("codigo_invitacion", "expira_en"): "Fecha y hora a partir de la cual el código ya no sirve.",
     ("codigo_invitacion", "usado_en"): "Fecha y hora en que se usó. Nulo mientras no se haya usado: sirve una sola vez.",
     ("codigo_invitacion", "usado_por"): "Usuario que se registró con este código.",
+    ("codigo_invitacion", "institucion_id"): (
+        "Institución para la que se generó. FK → institucion.id. Quien se registra con el código queda dentro de ella. Nulo si "
+        "solo da permiso para registrarse como facilitador."
+    ),
+    ("codigo_invitacion", "es_evaluacion"): "`true` si es una invitación para evaluar el sistema: a quien se registre se le crea además un jugador de prueba.",
+    ("codigo_invitacion", "como_administrador"): "`true` si quien se registra con el código queda como administrador de la institución (solo lo genera la plataforma).",
     ("usuario", "institucion_id"): (
         "Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, "
         "cuya institución se deduce de su curso, y en los facilitadores de la plataforma."
@@ -219,7 +264,59 @@ COLUMNAS: dict[tuple[str, str], str] = {
         "queda en `false` solo si el servidor tiene configurado el envío de correo."
     ),
     ("usuario", "codigo_verificacion_hash"): "Huella SHA-256 del código de 6 dígitos enviado al correo. El código en claro no se guarda.",
+    ("usuario", "correo_verificado_en"): "Fecha de comprobación de la propiedad del correo por código o Google. Nulo para cuentas antiguas o creadas sin envío de correo. Exigido al ingresar por dominio institucional.",
+    ("usuario", "recuperacion_password_hash"): "Huella del código de recuperación de contraseña, ligada a la contraseña vigente. Nunca se guarda el código en claro.",
+    ("usuario", "recuperacion_password_expira"): "Vencimiento UTC del código de recuperación de contraseña (15 minutos).",
+    ("usuario", "version_credenciales"): "Versión incluida en los tokens. Aumenta al cambiar o restablecer la contraseña para invalidar sesiones anteriores.",
     ("usuario", "codigo_verificacion_expira"): "Fecha y hora a partir de la cual el código de verificación ya no sirve (15 minutos).",
+    ("usuario", "totp_activo"): "`true` si el facilitador activó la verificación en dos pasos (app de códigos como Google Authenticator).",
+    ("usuario", "totp_secreto"): "Secreto de la app de códigos, CIFRADO con una clave derivada de `JWT_SECRET_KEY`. Nulo si nunca lo preparó.",
+    ("usuario", "totp_ultimo_paso"): "Último paso de 30 segundos cuyo código se aceptó: impide usar el mismo código dos veces.",
+    ("usuario", "cuenta_vinculada_id"): (
+        "Cuenta con la que se alterna en el modo evaluación: un facilitador que prueba el sistema como director apunta a su jugador de prueba, y "
+        "viceversa. FK → usuario.id. Nulo en el resto de las cuentas."
+    ),
+    ("usuario", "codigo_amigo"): (
+        "Código corto para que otro jugador le mande una solicitud de amistad sin saber su correo (se comparte por WhatsApp). Se genera la "
+        "primera vez que se pide. Nulo hasta entonces."
+    ),
+    ("usuario", "tutor_nombre"): "Nombre de la madre, el padre o el tutor de un jugador menor de edad. Lo ven solo el propio jugador, su docente, el administrador de su institución y la plataforma.",
+    ("usuario", "tutor_telefono"): "Teléfono (WhatsApp) del tutor, para que el docente pueda avisarle si pasa algo.",
+    ("usuario", "tutor_email"): "Correo opcional de la madre, el padre o el tutor para compartir el progreso o contactarse. Privado, con el mismo alcance que el teléfono.",
+    ("usuario", "autorizacion_tutor_en"): "Fecha y hora en que se declaró que el tutor autoriza el uso de ChessIA. Nulo si no se declaró.",
+    ("usuario", "cuenta_gestionada"): "`true` si la cuenta la creó un docente para un alumno sin correo: el alumno entra con un usuario y una clave que el docente le entrega.",
+    ("usuario", "totp_codigos_respaldo"): "Lista (JSON) de huellas SHA-256 de los códigos de respaldo que le quedan. Los códigos en claro no se guardan.",
+    ("institucion", "dominio_correo"): "Dominio del correo institucional (por ejemplo `colegio.edu.bo`). Si está definido, solo entran a los cursos de sus docentes los jugadores con un correo de ese dominio. Opcional.",
+    ("institucion", "es_prueba"): "`true` mientras es una institución de prueba, creada para que una institución evalúe el sistema antes de contratarlo.",
+    ("institucion", "es_demostracion"): "`true` en las instituciones de ejemplo que se cargan para mostrar el panel de ingresos; se quitan todas juntas.",
+    # amistad
+    ("amistad", "id"): "Identificador de la amistad.",
+    ("amistad", "solicitante_id"): "Jugador que mandó la solicitud. FK → usuario.id.",
+    ("amistad", "destinatario_id"): "Jugador que la recibe y la acepta o la rechaza. FK → usuario.id.",
+    ("amistad", "estado"): "`pendiente` (esperando respuesta) o `aceptada`. Una solicitud rechazada se borra.",
+    ("amistad", "creada_en"): "Fecha y hora en que se mandó la solicitud.",
+    ("amistad", "respondida_en"): "Fecha y hora en que el destinatario la aceptó. Nulo mientras está pendiente.",
+    # suscripcion
+    ("suscripcion", "id"): "Identificador de la suscripción.",
+    ("suscripcion", "institucion_id"): "Institución a la que pertenece. FK → institucion.id. Única: cada institución tiene una sola suscripción.",
+    ("suscripcion", "plan"): "`plan_60` (hasta 60 alumnos, Bs 350 al mes) o `plan_120` (hasta 120 alumnos, Bs 500 al mes).",
+    ("suscripcion", "ciclo"): "Ciclo del último pago: `mensual`, `trimestral` (10 % de descuento) o `anual` (paga 10 meses de 12).",
+    ("suscripcion", "prueba_hasta"): "Fecha y hora en que termina la prueba gratis (30 días desde que se creó, o el plazo que se haya elegido al dar de alta).",
+    ("suscripcion", "vigente_hasta"): "Fecha y hora hasta la que está pagada. Nulo si nunca pagó.",
+    ("suscripcion", "creado_en"): "Fecha y hora de creación.",
+    # pago
+    ("pago", "id"): "Identificador del pago.",
+    ("pago", "institucion_id"): "Institución que pagó. FK → institucion.id.",
+    ("pago", "plan"): "Plan que se pagó (`plan_60` o `plan_120`).",
+    ("pago", "ciclo"): "Ciclo que se pagó: `mensual`, `trimestral` o `anual`.",
+    ("pago", "monto_bs"): "Monto en bolivianos, ya con el descuento del ciclo.",
+    ("pago", "estado"): "`pendiente` (avisado, sin confirmar), `confirmado` (la plataforma lo confirmó) o `rechazado`.",
+    ("pago", "referencia"): "Lo que escribió la institución para que la plataforma lo encuentre (número de transferencia, nombre del titular…). Opcional.",
+    ("pago", "creado_en"): "Fecha y hora en que la institución avisó el pago.",
+    ("pago", "resuelto_en"): "Fecha y hora en que la plataforma lo confirmó o rechazó.",
+    ("pago", "resuelto_por"): "Usuario de la plataforma que lo resolvió. Sin clave foránea: el registro sobrevive a su cuenta.",
+    ("pago", "periodo_hasta"): "Hasta cuándo quedó pagada la suscripción con este pago (solo si se confirmó).",
+    ("pago", "nota"): "Comentario de la plataforma al resolver (por ejemplo, el motivo de un rechazo). Opcional.",
     # auditoria
     ("auditoria", "id"): "Identificador del evento.",
     ("auditoria", "creado_en"): "Fecha y hora del evento.",
@@ -248,7 +345,63 @@ COLUMNAS: dict[tuple[str, str], str] = {
         "Nulo = se usa el tono que eligió el facilitador en su perfil."
     ),
     ("curso", "cupo"): "Cantidad máxima de jugadores que pueden inscribirse, de 1 a 120 (60 por defecto). Lo define quien crea el curso.",
+    ("curso", "permite_retos"): "«Modo clase»: si es falso, los alumnos del curso no pueden retarse, buscar rival ni jugar salas entre ellos (el docente lo pausa mientras explica).",
+    ("curso", "autorizacion_familias"): "El docente (o la institución) declara que tiene la autorización de las familias de los alumnos de este curso. Con eso los alumnos menores no cargan los datos de un tutor uno por uno para jugar con sus compañeros.",
+    ("curso", "autorizacion_familias_en"): "Fecha y hora en que se hizo esa declaración. Nulo si no se hizo.",
     ("curso", "creado_en"): "Fecha y hora de creación.",
+    # denuncia
+    ("denuncia", "id"): "Identificador de la denuncia.",
+    ("denuncia", "denunciante_id"): "Jugador que denuncia. FK → usuario.id.",
+    ("denuncia", "denunciado_id"): "Jugador denunciado. FK → usuario.id.",
+    ("denuncia", "motivo"): "`conducta`, `trampa`, `abandono` u `otro`.",
+    ("denuncia", "detalle"): "Lo que escribió quien denuncia (hasta 300 caracteres). Opcional.",
+    ("denuncia", "codigo_sala"): "Código de la sala donde pasó, si fue en una partida. Opcional.",
+    ("denuncia", "estado"): "`nueva` o `revisada`.",
+    ("denuncia", "creada_en"): "Fecha y hora en que se hizo.",
+    ("denuncia", "resuelta_en"): "Fecha y hora en que un docente o la plataforma la marcó como revisada.",
+    ("denuncia", "resuelta_por"): "Usuario que la revisó. Sin clave foránea: el registro sobrevive a su cuenta.",
+    # torneo
+    ("torneo", "id"): "Identificador del torneo.",
+    ("torneo", "curso_id"): "Curso al que pertenece. FK → curso.id.",
+    ("torneo", "nombre"): "Nombre del torneo, que elige el docente.",
+    ("torneo", "control_tiempo_ms"): "Milisegundos por lado de cada partida (`0` = sin reloj).",
+    ("torneo", "rondas"): "Cuántas rondas tiene (de 1 a 9).",
+    ("torneo", "ronda_actual"): "La ronda que se está jugando (0 mientras se inscriben).",
+    ("torneo", "estado"): "`inscripcion`, `en_juego` o `terminado`.",
+    ("torneo", "creado_por"): "Docente que lo armó. Sin clave foránea: el torneo sobrevive a su cuenta.",
+    ("torneo", "creado_en"): "Fecha y hora de creación.",
+    # torneo_jugador
+    ("torneo_jugador", "id"): "Identificador de la inscripción.",
+    ("torneo_jugador", "torneo_id"): "Torneo en el que juega. FK → torneo.id.",
+    ("torneo_jugador", "usuario_id"): "Jugador inscrito. FK → usuario.id.",
+    ("torneo_jugador", "puntos"): "Puntos acumulados: 1 por victoria, 0,5 por tablas, 1 por descanso.",
+    ("torneo_jugador", "descansos"): "Rondas en que le tocó descansar (cuando los jugadores son impares).",
+    ("torneo_jugador", "inscrito_en"): "Fecha y hora en que se inscribió.",
+    # torneo_partida
+    ("torneo_partida", "id"): "Identificador de la partida del torneo.",
+    ("torneo_partida", "torneo_id"): "Torneo al que pertenece. FK → torneo.id.",
+    ("torneo_partida", "ronda"): "Ronda en que se juega.",
+    ("torneo_partida", "blancas_id"): "Jugador de blancas. FK → usuario.id.",
+    ("torneo_partida", "negras_id"): "Jugador de negras. FK → usuario.id. Nulo si el de blancas descansa esa ronda.",
+    ("torneo_partida", "codigo_sala"): "Código de la sala donde se juega.",
+    ("torneo_partida", "resultado"): "`1-0`, `0-1`, `1/2-1/2` o `0-0` (nadie jugó). Nulo mientras se juega.",
+    # aviso_curso
+    ("aviso_curso", "id"): "Identificador del aviso.",
+    ("aviso_curso", "curso_id"): "Curso al que va dirigido. FK → curso.id.",
+    ("aviso_curso", "autor_id"): "Docente que lo escribió. Sin clave foránea: el aviso sobrevive a su cuenta.",
+    ("aviso_curso", "texto"): "El mensaje (hasta 500 caracteres).",
+    ("aviso_curso", "enlace"): "Un enlace opcional, por ejemplo el de una clase en vivo.",
+    ("aviso_curso", "creado_en"): "Fecha y hora en que se publicó.",
+    # tarea_curso
+    ("tarea_curso", "id"): "Identificador de la tarea.",
+    ("tarea_curso", "curso_id"): "Curso al que se le pone. FK → curso.id.",
+    ("tarea_curso", "autor_id"): "Docente que la puso. Sin clave foránea: la tarea sobrevive a su cuenta.",
+    ("tarea_curso", "titulo"): "Cómo se la presenta a los alumnos.",
+    ("tarea_curso", "tipo"): "Qué se mide: `partidas_ia` (partidas terminadas contra Turing o Stockfish), `partidas_amigos` (partidas terminadas contra compañeros o amigos) o `precision` (una partida con esa precisión o más).",
+    ("tarea_curso", "meta"): "La cantidad de partidas, o el porcentaje de precisión, que hay que alcanzar.",
+    ("tarea_curso", "desde"): "Desde cuándo cuenta lo que juegan.",
+    ("tarea_curso", "hasta"): "Hasta cuándo cuenta (fecha límite).",
+    ("tarea_curso", "creada_en"): "Fecha y hora en que se puso.",
     # inscripcion
     ("inscripcion", "id"): "Identificador de la inscripción.",
     ("inscripcion", "curso_id"): "Curso en el que está el jugador. FK → curso.id.",
@@ -294,6 +447,17 @@ RELACIONES = [
     ("usuario", "codigo_invitacion", "1 a N", "Un facilitador genera muchos códigos de invitación; cada uno lo usa, a lo sumo, una persona."),
     ("institucion", "usuario", "1 a N", "Una institución agrupa a sus facilitadores (docentes); cada facilitador pertenece a una sola institución."),
     ("usuario", "institucion", "1 a 1", "Un usuario es el administrador de, a lo sumo, una institución."),
+    ("institucion", "suscripcion", "1 a 1", "Cada institución tiene una sola suscripción."),
+    ("usuario", "usuario", "1 a 1", "En el modo evaluación, un facilitador y su jugador de prueba se apuntan entre sí."),
+    ("institucion", "codigo_invitacion", "1 a N", "Una institución tiene varios códigos de invitación para sus docentes."),
+    ("institucion", "pago", "1 a N", "Una institución avisa muchos pagos a lo largo del tiempo."),
+    ("curso", "torneo", "1 a N", "Un curso arma varios torneos relámpago."),
+    ("torneo", "torneo_jugador", "1 a N", "Un torneo tiene muchos jugadores inscritos."),
+    ("torneo", "torneo_partida", "1 a N", "Un torneo tiene muchas partidas, una por pareja y por ronda."),
+    ("curso", "aviso_curso", "1 a N", "Un curso recibe varios avisos de su docente."),
+    ("curso", "tarea_curso", "1 a N", "Un curso recibe varias tareas de su docente."),
+    ("usuario", "denuncia", "1 a N", "Un jugador puede denunciar a otros o ser denunciado, varias veces."),
+    ("usuario", "amistad", "1 a N", "Un jugador manda y recibe muchas solicitudes de amistad; cada amistad une a dos jugadores distintos."),
     ("usuario", "curso", "1 a N", "Un facilitador crea varios cursos; cada curso tiene un solo facilitador."),
     ("curso", "inscripcion", "1 a N", "Un curso tiene muchos jugadores inscritos."),
     ("usuario", "medalla_personalizada", "1 a N", "Un facilitador crea muchas medallas propias."),
@@ -363,7 +527,8 @@ def _sql_tablas(dialecto, *, si_no_existe: bool) -> list[str]:
     salida: list[str] = []
     for tabla in Base.metadata.sorted_tables:
         salida.append(f"-- {tabla.name}: {TABLAS[tabla.name][0]}")
-        salida.append(str(CreateTable(tabla, if_not_exists=si_no_existe).compile(dialect=dialecto)).strip() + ";")
+        ddl = str(CreateTable(tabla, if_not_exists=si_no_existe).compile(dialect=dialecto)).strip()
+        salida.append("\n".join(linea.rstrip() for linea in ddl.splitlines()) + ";")
         for indice in sorted(tabla.indexes, key=lambda i: i.name or ""):
             salida.append(str(CreateIndex(indice, if_not_exists=si_no_existe).compile(dialect=dialecto)).strip() + ";")
         salida.append("")

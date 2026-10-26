@@ -5,6 +5,35 @@ from backend.modelos.tablas_orm import InstitucionORM
 from backend.rutas.test_ruta_gestion_usuarios import contexto  # noqa: F401  (fixture compartida)
 
 
+def test_dominio_institucional_exige_propiedad_del_correo_y_no_autoriza_por_si_solo(perfiles, monkeypatch):
+    from backend.modelos.tablas_orm import UsuarioORM
+    from backend.servicios.auth import servicio_verificacion
+
+    cliente, personas, fabrica = perfiles
+    institucion = _crear_institucion(cliente, personas)
+    plataforma = personas["plataforma"]["headers"]
+    cliente.put(f"/instituciones/{institucion['id']}/docentes/{personas['docente']['id']}", headers=plataforma)
+    assert cliente.patch(f"/instituciones/{institucion['id']}", json={"dominio_correo": "test.com"}, headers=plataforma).status_code == 200
+    curso = cliente.post("/cursos", json={"nombre": "Curso institucional"}, headers=personas["docente"]["headers"]).json()
+    with fabrica() as db:
+        db.get(UsuarioORM, personas["alumno"]["id"]).edad = 10
+        db.commit()
+    enviados = []
+    monkeypatch.setenv("SMTP_HOST", "correo.example.com")
+    monkeypatch.setenv("SMTP_REMITENTE", "noreply@example.com")
+    monkeypatch.setattr(servicio_verificacion, "_enviar_en_segundo_plano", lambda destino, nombre, codigo: enviados.append(codigo))
+    servicio_verificacion._ultimo_envio.clear()
+    headers = personas["alumno"]["headers"]
+    intento = cliente.post("/cursos/unirse", json={"codigo": curso["codigo"]}, headers=headers)
+    assert intento.status_code == 400 and "Verificá" in intento.json()["detail"]
+    assert len(enviados) == 1
+    assert cliente.post("/auth/verificar-correo", json={"codigo": enviados[0]}, headers=headers).status_code == 200
+    assert cliente.post("/cursos/unirse", json={"codigo": curso["codigo"]}, headers=headers).status_code == 200
+    assert cliente.get("/auth/me/autorizacion", headers=headers).json()["estado"] == "falta_tutor"
+    cliente.patch(f"/cursos/{curso['id']}", json={"autorizacion_familias": True}, headers=personas["docente"]["headers"])
+    assert cliente.get("/auth/me/autorizacion", headers=headers).json()["estado"] == "institucional"
+
+
 @pytest.fixture
 def perfiles(contexto, monkeypatch):
     """Una persona de cada perfil. Los facilitadores se registran con `*@test.com` autorizado y después solo `plataforma@test.com`

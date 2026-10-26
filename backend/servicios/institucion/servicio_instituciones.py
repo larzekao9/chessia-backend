@@ -15,10 +15,12 @@ Un usuario pertenece a una sola institución a la vez (asignarlo a otra lo mueve
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, aliased
 
-from backend.modelos.tablas_orm import TIPOS_INSTITUCION, CursoORM, InscripcionORM, InstitucionORM, UsuarioORM
+from backend.modelos.tablas_orm import TIPOS_INSTITUCION, CodigoInvitacionORM, CursoORM, InscripcionORM, InstitucionORM, UsuarioORM
 from backend.servicios.curso.servicio_cursos import es_principal
 
 LARGO_NOMBRE = (3, 80)
@@ -79,9 +81,12 @@ def institucion_de(db: Session, usuario: UsuarioORM) -> InstitucionORM | None:
     return db.get(InstitucionORM, usuario.institucion_id) if usuario.institucion_id is not None else None
 
 
-def administra_alguna(db: Session, usuario_id: int) -> bool:
-    """`True` si el usuario es el administrador de alguna institución."""
-    return db.scalar(select(InstitucionORM.id).where(InstitucionORM.administrador_id == usuario_id)) is not None
+def administra_alguna(db: Session, usuario_id: int, incluir_prueba: bool = True) -> bool:
+    """`True` si el usuario es el administrador de alguna institución. Con `incluir_prueba=False` no cuentan las instituciones de prueba."""
+    consulta = select(InstitucionORM.id).where(InstitucionORM.administrador_id == usuario_id)
+    if not incluir_prueba:
+        consulta = consulta.where(InstitucionORM.es_prueba.is_(False))
+    return db.scalar(consulta.limit(1)) is not None
 
 
 def crear(db: Session, nombre: str, tipo: str, administrador_id: int | None = None) -> InstitucionORM:
@@ -107,6 +112,34 @@ def editar(db: Session, institucion: InstitucionORM, nombre: str | None = None, 
         institucion.nombre = nombre
     if tipo is not None:
         institucion.tipo = _tipo_valido(tipo)
+    db.commit()
+    db.refresh(institucion)
+    return institucion
+
+
+def fijar_dominio_correo(db: Session, institucion: InstitucionORM, dominio: str | None) -> InstitucionORM:
+    """Define (o quita, con vacío) el dominio del correo institucional: solo entran a los cursos de sus docentes los jugadores con un correo de ese dominio.
+
+    Raises:
+        ErrorInstitucion: si no parece un dominio (por ejemplo `colegio.edu.bo`).
+    """
+    texto = (dominio or "").strip().lower().lstrip("@")
+    if texto and not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+", texto):
+        raise ErrorInstitucion("El dominio tiene que ser como colegio.edu.bo (sin @ ni espacios)")
+    institucion.dominio_correo = texto or None
+    db.commit()
+    db.refresh(institucion)
+    return institucion
+
+
+def convertir_en_cliente(db: Session, institucion: InstitucionORM, nombre: str | None = None, tipo: str | None = None) -> InstitucionORM:
+    """La institución de prueba pasa a ser cliente: deja de ser de prueba (y, con ello, sus códigos pendientes dejan de crear un jugador
+    de prueba) y, si se indica, cambia de nombre y de tipo. Todo lo que armó la persona que la evaluaba se conserva."""
+    if not institucion.es_prueba:
+        raise ErrorInstitucion("Esa institución ya es cliente")
+    editar(db, institucion, nombre, tipo)
+    institucion.es_prueba = False
+    db.execute(update(CodigoInvitacionORM).where(CodigoInvitacionORM.institucion_id == institucion.id).values(es_evaluacion=False))
     db.commit()
     db.refresh(institucion)
     return institucion

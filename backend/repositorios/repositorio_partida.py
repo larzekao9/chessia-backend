@@ -35,6 +35,15 @@ class RepositorioPartidas(ABC):
     def listar(self) -> list[Partida]:
         """Devuelve todas las partidas guardadas, más reciente primero."""
 
+    def listar_salas_abiertas(self) -> list[Partida]:
+        """Las salas entre personas (`humano`) que están esperando rival o en curso, más reciente primero.
+
+        Las consulta el barrido de limpieza y la vista del docente en cada consulta de una sala: recorrer TODAS las partidas (cada una reconstruye su tablero
+        jugada por jugada) sería carísimo cuando la base ya acumula miles. Esta implementación sirve para cualquier repositorio; el de la base la reemplaza
+        por una consulta que trae solo esas filas.
+        """
+        return [p for p in self.listar() if p.tipo_oponente == "humano" and p.estado in ("esperando", "en_curso")]
+
     @abstractmethod
     def listar_por_usuario(self, usuario_id: int) -> list[Partida]:
         """Devuelve las partidas de un usuario, más reciente primero.
@@ -118,6 +127,13 @@ class RepositorioPartidasEnMemoria(RepositorioPartidas):
 
     def listar(self) -> list[Partida]:
         return list(reversed(self._partidas.values()))
+
+    def listar_salas_abiertas(self) -> list[Partida]:
+        return [
+            partida
+            for partida in reversed(self._partidas.values())
+            if partida.tipo_oponente == "humano" and partida.estado in ("esperando", "en_curso")
+        ]
 
     def listar_por_usuario(self, usuario_id: int) -> list[Partida]:
         return [
@@ -325,6 +341,15 @@ class RepositorioPartidasPostgres(RepositorioPartidas):
     def listar(self) -> list[Partida]:
         with self._fabrica_sesiones() as sesion:
             filas = sesion.scalars(select(PartidaORM).order_by(PartidaORM.fecha.desc())).all()
+            return [_fila_a_partida(fila) for fila in filas]
+
+    def listar_salas_abiertas(self) -> list[Partida]:
+        with self._fabrica_sesiones() as sesion:
+            filas = sesion.scalars(
+                select(PartidaORM)
+                .where(PartidaORM.tipo_oponente == "humano", PartidaORM.estado.in_(("esperando", "en_curso")))
+                .order_by(PartidaORM.fecha.desc())
+            ).all()
             return [_fila_a_partida(fila) for fila in filas]
 
     def listar_por_usuario(self, usuario_id: int) -> list[Partida]:

@@ -275,6 +275,12 @@ def test_google_login_rechaza_token_demo_si_esta_apagado(cliente, monkeypatch) -
     assert "access_token" not in res.text
 
 
+def test_google_login_rechaza_tokens_ficticios_por_defecto(cliente, monkeypatch) -> None:
+    monkeypatch.delenv("PERMITIR_LOGIN_GOOGLE_DEMO", raising=False)
+    respuesta = cliente.post("/auth/google", json={"credential": "demo_intruso@gmail.com"})
+    assert respuesta.status_code in (400, 401) and "access_token" not in respuesta.text
+
+
 def test_google_login_vincula_cuenta_existente_y_preserva_rol(cliente) -> None:
     # 1. Se registra previamente con correo y contraseña
     cliente.post("/auth/registro", json={"email": "vinculado@test.com", "nombre": "Vinculado", "password": "pass1234"})
