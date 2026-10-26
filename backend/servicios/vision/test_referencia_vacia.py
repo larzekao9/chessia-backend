@@ -160,3 +160,25 @@ def test_borrar_la_referencia_la_quita_del_disco_y_de_memoria() -> None:
     assert rv.cargar_referencia("principal") is not None
     rv.borrar_referencia("principal")
     assert rv.cargar_referencia("principal") is None and not rv.ruta_referencia("principal").exists()
+
+
+def test_cada_perfil_de_tablero_tiene_su_propia_referencia() -> None:
+    """Dos tableros físicos calibrados para la misma cámara no se pisan ni se mezclan: activar uno usa SU referencia."""
+    tablero.guardar_esquinas_calibradas({n: PUNTOS[n] for n in tablero.ORDEN_DE_CLICS}, tablero.archivo_esquinas("principal"))
+    rv.guardar_referencia("principal", [(_vacio(), ESQUINAS)])  # perfil "default" (activo por ahora)
+    tablero.establecer_perfil_activo("principal", "mesa_2")
+    tablero.guardar_esquinas_calibradas({n: PUNTOS[n] for n in tablero.ORDEN_DE_CLICS}, tablero.archivo_esquinas("principal"))
+    rv.guardar_referencia("principal", [(_con_piezas("e4", ruido=0), ESQUINAS)])  # perfil "mesa_2" (ahora activo), bien distinta
+
+    # Con "mesa_2" activo, detectar_casilla compara contra SU referencia (la de _con_piezas, "vacía" para mesa_2) y no ve nada raro.
+    assert rv.detectar_casilla({"principal": _con_piezas("e4", ruido=0)})[1] == "ninguna"
+    referencia_mesa_2 = rv.ruta_referencia("principal").read_bytes()
+
+    tablero.establecer_perfil_activo("principal", tablero.PERFIL_POR_DEFECTO)
+    # Vuelta al tablero original: su referencia sigue intacta (no la pisó la de mesa_2) y una pieza en e4 ahora sí se nota.
+    assert rv.ruta_referencia("principal").read_bytes() != referencia_mesa_2
+    assert rv.detectar_casilla({"principal": _con_piezas("e4", ruido=6)})[:2] == ("e4", "ok")
+
+    # Borrar el tablero "mesa_2" no toca la referencia del por defecto.
+    tablero.borrar_perfil("principal", "mesa_2")
+    assert rv.cargar_referencia("principal") is not None

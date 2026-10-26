@@ -9,6 +9,9 @@ la cabeza de una pieza alta cae sobre la casilla de al lado y "también cambia",
 reales: la cámara casi cenital acertó 30 de 30 (la casilla de la pieza cambia 13 veces más que la segunda) y la diagonal 27 de 30.
 
 La referencia se guarda al capturar «Casilla vacía» (`dataset_propio.capturar_foto_etiquetada`); si cambia mucho la luz, se vuelve a capturar.
+Es por `(cámara, perfil)`: cada tablero físico calibrado (`tablero.listar_perfiles`) tiene la suya, para no comparar contra el tablero vacío
+de otro. Al calibrar un tablero NUEVO la referencia anterior se borra sola si las esquinas cambiaron mucho (`calibracion_camara.guardar_calibracion`);
+al activar un perfil ya calibrado (sin recalibrar) la referencia de ESE perfil es la que se usa, intacta.
 """
 from __future__ import annotations
 
@@ -32,9 +35,13 @@ NOMBRES = [f"{c}{f}" for f in range(8, 0, -1) for c in "abcdefgh"]
 """Orden de las casillas: a8, b8 … h1 (el mismo que `captura_estable.NOMBRES`)."""
 
 
-def ruta_referencia(camara: str = "principal") -> Path:
-    """Foto de referencia de `camara`, junto a sus esquinas (así una prueba que redirija `tablero.ARCHIVO_ESQUINAS` la aísla)."""
-    return tablero.ARCHIVO_ESQUINAS.with_name(f"vacio_{camara}.png")
+def ruta_referencia(camara: str = "principal", perfil: str | None = None) -> Path:
+    """Foto de referencia de `camara` para `perfil` (el activo, si no se da ninguno), junto a sus esquinas (así una prueba que
+    redirija `tablero.ARCHIVO_ESQUINAS` la aísla). El perfil por defecto usa el nombre de siempre (`vacio_<camara>.png`), así una
+    instalación existente no pierde su referencia; los demás van aparte (`vacio_<camara>__<perfil>.png`)."""
+    perfil = perfil if perfil is not None else tablero.perfil_activo(camara)
+    sufijo = "" if perfil == tablero.PERFIL_POR_DEFECTO else f"__{tablero.nombre_de_perfil_seguro(perfil)}"
+    return tablero.ARCHIVO_ESQUINAS.with_name(f"vacio_{camara}{sufijo}.png")
 
 
 def _enderezada(imagen: np.ndarray, esquinas: np.ndarray) -> np.ndarray:
@@ -54,8 +61,9 @@ def _es_uniforme(imagen: np.ndarray) -> bool:
     return float(cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY).std()) < VARIACION_MINIMA
 
 
-def guardar_referencia(camara: str, fotos: list[tuple[np.ndarray, np.ndarray]]) -> None:
-    """Guarda la referencia del tablero vacío de `camara`: la mediana de `fotos` (`(imagen, esquinas en el orden de enderezar_tablero)`).
+def guardar_referencia(camara: str, fotos: list[tuple[np.ndarray, np.ndarray]], perfil: str | None = None) -> None:
+    """Guarda la referencia del tablero vacío de `camara` para `perfil` (el activo, si no se da ninguno): la mediana de `fotos`
+    (`(imagen, esquinas en el orden de enderezar_tablero)`).
 
     Raises:
         ValueError: sin fotos, o si el tablero enderezado sale casi liso (las esquinas calibradas no coinciden con la foto): no se guarda una referencia inútil.
@@ -69,14 +77,15 @@ def guardar_referencia(camara: str, fotos: list[tuple[np.ndarray, np.ndarray]]) 
             f"La foto del tablero vacío de la cámara {camara} salió lisa: las esquinas calibradas no coinciden con lo que ve la cámara "
             "(¿se movió o se recalibró después?). Recalibrá la cámara y volvé a sacar «Casilla vacía»."
         )
-    destino = ruta_referencia(camara)
+    destino = ruta_referencia(camara, perfil)
     destino.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(destino), mediana)
 
 
-def borrar_referencia(camara: str = "principal") -> None:
-    """Quita la referencia del tablero vacío de `camara` (y la que tenga en memoria): hay que sacarla de nuevo."""
-    ruta = ruta_referencia(camara)
+def borrar_referencia(camara: str = "principal", perfil: str | None = None) -> None:
+    """Quita la referencia del tablero vacío de `camara` para `perfil` (el activo, si no se da ninguno; y la que tenga en memoria):
+    hay que sacarla de nuevo."""
+    ruta = ruta_referencia(camara, perfil)
     ruta.unlink(missing_ok=True)
     _referencias.pop(ruta, None)
 
@@ -85,13 +94,13 @@ _referencias: dict[Path, tuple[tuple[int, int], np.ndarray]] = {}
 _lab_de_referencias: dict[int, tuple[np.ndarray, np.ndarray]] = {}
 
 
-def cargar_referencia(camara: str = "principal") -> np.ndarray | None:
-    """La referencia de `camara` (enderezada, BGR), o `None` si todavía no se guardó.
+def cargar_referencia(camara: str = "principal", perfil: str | None = None) -> np.ndarray | None:
+    """La referencia de `camara` para `perfil` (enderezada, BGR; el perfil activo si no se da ninguno), o `None` si todavía no se guardó.
 
     Se lee del disco solo cuando el archivo cambia (fecha o tamaño): en el video en vivo se pide en cada cuadro. El arreglo devuelto es
     compartido, no hay que modificarlo.
     """
-    ruta = ruta_referencia(camara)
+    ruta = ruta_referencia(camara, perfil)
     try:
         estado = ruta.stat()
     except FileNotFoundError:
@@ -156,11 +165,13 @@ def _inclinacion(camara: str, imagen: np.ndarray, esquinas: np.ndarray) -> float
 
 
 def _cambios_por_camara(fotos: dict[str, np.ndarray]) -> dict[str, tuple[np.ndarray, float]]:
-    """`{camara: (puntajes, inclinación)}` de las cámaras de `fotos` que tienen esquinas calibradas y referencia."""
+    """`{camara: (puntajes, inclinación)}` de las cámaras de `fotos` que tienen esquinas calibradas y referencia, las dos del
+    mismo tablero activo ahora (así nunca se compara contra la referencia de otro tablero)."""
     lecturas = {}
     for camara, imagen in fotos.items():
-        referencia = cargar_referencia(camara)
-        esquinas = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara))
+        perfil = tablero.perfil_activo(camara)
+        referencia = cargar_referencia(camara, perfil)
+        esquinas = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara, perfil))
         if referencia is None or esquinas is None:
             continue
         lecturas[camara] = (puntajes(imagen, esquinas, referencia), _inclinacion(camara, imagen, esquinas))

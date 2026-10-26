@@ -175,7 +175,7 @@ def guardar_calibracion(
 
     nuevas = np.array([puntos[nombre] for nombre in tablero.ORDEN_DE_ENDEREZADO], dtype=float)
     if anteriores is None or float(np.abs(np.asarray(anteriores, dtype=float) - nuevas).max()) > UMBRAL_REFERENCIA_VACIA_PX:
-        referencia_vacia.borrar_referencia(camara)
+        referencia_vacia.borrar_referencia(camara, perfil)
 
 
 def _leer_metadata(esquinas: dict[str, list[float]], camara: str = "principal", perfil: str | None = None) -> dict | None:

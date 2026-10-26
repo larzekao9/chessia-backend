@@ -53,7 +53,7 @@ def _archivo_esquinas_base(camara: str = "principal") -> Path:
     return ARCHIVO_ESQUINAS.with_name(f"{ARCHIVO_ESQUINAS.stem}_{camara}{ARCHIVO_ESQUINAS.suffix}")
 
 
-def _nombre_de_perfil_seguro(perfil: str) -> str:
+def nombre_de_perfil_seguro(perfil: str) -> str:
     """`perfil` como nombre de archivo: solo letras, números, guion y guion bajo (lo que se escriba en la pantalla puede traer
     espacios, tildes o barras)."""
     limpio = "".join(c if c.isalnum() or c in "-_" else "_" for c in perfil.strip()).strip("_")
@@ -99,7 +99,7 @@ def archivo_esquinas(camara: str = "principal", perfil: str | None = None) -> Pa
     perfil = perfil if perfil is not None else perfil_activo(camara)
     if perfil == PERFIL_POR_DEFECTO:
         return base
-    return base.with_name(f"{base.stem}__{_nombre_de_perfil_seguro(perfil)}{base.suffix}")
+    return base.with_name(f"{base.stem}__{nombre_de_perfil_seguro(perfil)}{base.suffix}")
 
 
 def listar_perfiles(camara: str = "principal") -> list[str]:
@@ -111,7 +111,7 @@ def listar_perfiles(camara: str = "principal") -> list[str]:
     prefijo = f"{base.stem}__"
     # El glob también agarra, con el mismo prefijo y la misma extensión ".json", el archivo de metadata de cada perfil
     # (`<prefijo><perfil>.meta.json`): se descarta por tener un "." de más en lo que seguiría al prefijo (un nombre de
-    # perfil nunca lo tiene, ver `_nombre_de_perfil_seguro`).
+    # perfil nunca lo tiene, ver `nombre_de_perfil_seguro`).
     encontrados = sorted(
         archivo.stem[len(prefijo):]
         for archivo in base.parent.glob(f"{prefijo}*{base.suffix}")
