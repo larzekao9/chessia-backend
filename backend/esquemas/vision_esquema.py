@@ -46,6 +46,7 @@ class EstadoCalibracionResponse(BaseModel):
     """Cuerpo de salida de GET /vision/calibracion/estado y de POST /vision/calibracion/guardar.
 
     `vigente` es `None` cuando no se pudo verificar (la cámara no entrega imagen); `motivo_no_vigente` explica el porqué si no es `True`.
+    `perfil` es el tablero (de `GET /vision/calibracion/perfiles`) al que corresponde este estado: `"default"` si no se armó ninguno aparte.
     """
 
     calibrada: bool
@@ -56,6 +57,22 @@ class EstadoCalibracionResponse(BaseModel):
     resolucion: list[int] | None = None
     fuente: str | None = None
     advertencias: list[str] = []
+    perfil: str = "default"
+
+
+class PerfilTableroResponse(BaseModel):
+    """Un tablero físico calibrado (o calibrable) para una cámara."""
+
+    nombre: str
+    activo: bool
+    calibrada: bool
+    fecha: str | None = None
+
+
+class PerfilesTableroResponse(BaseModel):
+    """Cuerpo de salida de GET /vision/calibracion/perfiles: los tableros de una cámara, el activo primero."""
+
+    perfiles: list[PerfilTableroResponse]
 
 
 class ComprobarCalibracionResponse(BaseModel):

@@ -985,6 +985,24 @@ alumnos de un curso compitan entre sí y lo hagan de forma justa y segura.
   La suite se ejecutó con costo bcrypt reducido únicamente en el proceso de pruebas; la aplicación conserva su configuración normal.
   Pendiente operativo: configurar y probar un servidor SMTP real. Los mensajes familiares de WhatsApp/correo abren borradores sin requerir ese SMTP.
 
+### Más de un tablero físico calibrado por cámara (26/10/2026)
+
+Antes, cada cámara (`principal`/`secundaria`) tenía una sola calibración guardada: recalibrar para un tablero físico nuevo pisaba
+la del anterior. Ahora cada cámara puede tener varios **tableros** calibrados (`tablero.listar_perfiles`, `tablero.perfil_activo`),
+uno `"default"` (el de siempre: mismos archivos de cualquier instalación existente, nada cambia si no se usa esto) y los demás con
+nombre propio, guardados aparte (`esquinas_tablero[_<camara>]__<nombre>.json` en `calibracion_local/`, no se sube a git).
+
+- **Calibrar un tablero nuevo** (`POST /vision/calibracion/guardar` con `perfil`): guarda sus esquinas sin tocar las de los demás
+  y lo deja activo — es lo que usa el reconocimiento desde ese momento.
+- **Cambiar de tablero sin recalibrar** (`POST /vision/calibracion/perfiles/activar`): vuelve a una calibración ya guardada al
+  instante (por ejemplo, al llevar el brazo entre el laboratorio y la Expociencia con mesas distintas).
+- **Ver y borrar tableros** (`GET /vision/calibracion/perfiles`, `DELETE /vision/calibracion/perfiles/{perfil}`): el por defecto
+  no se borra por acá (sigue siendo `DELETE /vision/calibracion/quitar`), para no perder nunca la calibración original por error.
+- Pantalla «Cámara y Brazo» → asistente de calibración: lista los tableros de la cámara con cuál está activo, botón «Activar» en
+  los demás y un campo para calibrar uno nuevo con nombre, sin perder el que ya estaba.
+- El resto del reconocimiento (seguimiento en vivo, captura del dataset, verificación entre las dos cámaras) no cambió: todos
+  siguen pidiendo `tablero.archivo_esquinas(camara)` igual que antes, que ahora resuelve sola el tablero activo.
+
 ---
 
 ## Seguridad (revisión del 25/10/2026)

@@ -1,10 +1,12 @@
 """Calibración de la cámara fija (proceso A del PLAN_CAMARA.md): calidad de las esquinas marcadas, metadata de la sesión
 (resolución, cámara, fecha), vigencia y detección de que la cámara se movió.
 
-Las esquinas siguen guardándose donde las lee el reconocimiento (`tablero.ARCHIVO_ESQUINAS`); al lado van dos archivos
+Las esquinas siguen guardándose donde las lee el reconocimiento (`tablero.archivo_esquinas`); al lado van dos archivos
 con el mismo nombre base: `<nombre>.meta.json` (metadata) y `<nombre>.referencia.jpg` (la foto sobre la que se marcó).
-Las rutas salen de `tablero.ARCHIVO_ESQUINAS` en cada llamada, así que una prueba que lo redirija a una carpeta temporal
-aísla también estos archivos.
+Cada función toma un `perfil` opcional (de `tablero.listar_perfiles`): varios tableros físicos pueden tener cada uno su
+calibración guardada para la misma cámara, sin pisarse; sin `perfil` se usa el que esté activo ahora (`tablero.perfil_activo`).
+Las rutas salen de `tablero.archivo_esquinas` en cada llamada, así que una prueba que redirija `tablero.ARCHIVO_ESQUINAS` a una
+carpeta temporal aísla también estos archivos.
 """
 from __future__ import annotations
 
@@ -34,14 +36,14 @@ UMBRAL_DESPLAZAMIENTO_PX = 6.0
 """Desplazamiento máximo (en píxeles) de una esquina del tablero a partir del cual se considera que la cámara se movió."""
 
 
-def ruta_metadata(camara: str = "principal") -> Path:
-    """Archivo de metadata junto al de esquinas de `camara`."""
-    return tablero.archivo_esquinas(camara).with_suffix(".meta.json")
+def ruta_metadata(camara: str = "principal", perfil: str | None = None) -> Path:
+    """Archivo de metadata junto al de esquinas de `camara` (del perfil activo, si no se da ninguno)."""
+    return tablero.archivo_esquinas(camara, perfil).with_suffix(".meta.json")
 
 
-def ruta_referencia(camara: str = "principal") -> Path:
-    """Foto de referencia junto al archivo de esquinas de `camara`."""
-    return tablero.archivo_esquinas(camara).with_suffix(".referencia.jpg")
+def ruta_referencia(camara: str = "principal", perfil: str | None = None) -> Path:
+    """Foto de referencia junto al archivo de esquinas de `camara` (del perfil activo, si no se da ninguno)."""
+    return tablero.archivo_esquinas(camara, perfil).with_suffix(".referencia.jpg")
 
 
 def _distancia(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -141,11 +143,18 @@ def evaluar_calidad(
 
 
 def guardar_calibracion(
-    puntos: dict[str, tuple[float, float]], imagen: np.ndarray, fuente: str, advertencias: list[str], camara: str = "principal", rotacion: int = 0
+    puntos: dict[str, tuple[float, float]],
+    imagen: np.ndarray,
+    fuente: str,
+    advertencias: list[str],
+    camara: str = "principal",
+    rotacion: int = 0,
+    perfil: str | None = None,
 ) -> None:
-    """Guarda las esquinas de `camara` (las que usa el reconocimiento), la metadata de la sesión y la foto de referencia."""
-    anteriores = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara))
-    tablero.guardar_esquinas_calibradas(puntos, tablero.archivo_esquinas(camara))
+    """Guarda las esquinas de `camara` (las que usa el reconocimiento), la metadata de la sesión y la foto de referencia, para
+    `perfil` (el activo, si no se da ninguno)."""
+    anteriores = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara, perfil))
+    tablero.guardar_esquinas_calibradas(puntos, tablero.archivo_esquinas(camara, perfil))
     alto, ancho = imagen.shape[:2]
     metadata = {
         "esquinas": {nombre: [float(x), float(y)] for nombre, (x, y) in puntos.items()},
@@ -155,11 +164,11 @@ def guardar_calibracion(
         "advertencias": advertencias,
         "rotacion": rotacion,
     }
-    ruta_metadata(camara).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+    ruta_metadata(camara, perfil).write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
     exito, buffer = cv2.imencode(".jpg", imagen)
     if not exito:
         raise ValueError("No se pudo codificar la foto de referencia")
-    ruta_referencia(camara).write_bytes(buffer.tobytes())
+    ruta_referencia(camara, perfil).write_bytes(buffer.tobytes())
     # La foto del tablero vacío se guardó ya enderezada con las esquinas de ANTES: si se corrieron de verdad (cámara movida o esquinas muy distintas) no
     # sirve y hay que sacarla de nuevo; si solo se afinaron unos píxeles (volver a marcar la misma posición), sigue valiendo.
     from backend.servicios.vision import referencia_vacia
@@ -169,10 +178,10 @@ def guardar_calibracion(
         referencia_vacia.borrar_referencia(camara)
 
 
-def _leer_metadata(esquinas: dict[str, list[float]], camara: str = "principal") -> dict | None:
+def _leer_metadata(esquinas: dict[str, list[float]], camara: str = "principal", perfil: str | None = None) -> dict | None:
     """Metadata de la calibración actual, o `None` si falta o pertenece a otras esquinas (p. ej. guardadas por la ruta vieja)."""
     try:
-        metadata = json.loads(ruta_metadata(camara).read_text(encoding="utf-8"))
+        metadata = json.loads(ruta_metadata(camara, perfil).read_text(encoding="utf-8"))
         if metadata["esquinas"] != esquinas:
             return None
         ancho, alto = metadata["resolucion"]
@@ -181,16 +190,22 @@ def _leer_metadata(esquinas: dict[str, list[float]], camara: str = "principal") 
         return None
 
 
-def _esquinas_guardadas(camara: str = "principal") -> dict[str, list[float]] | None:
+def _esquinas_guardadas(camara: str = "principal", perfil: str | None = None) -> dict[str, list[float]] | None:
     try:
-        datos = json.loads(tablero.archivo_esquinas(camara).read_text(encoding="utf-8"))
+        datos = json.loads(tablero.archivo_esquinas(camara, perfil).read_text(encoding="utf-8"))
         return {nombre: [float(datos[nombre][0]), float(datos[nombre][1])] for nombre in tablero.ORDEN_DE_CLICS}
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return None
 
 
-def estado(resolucion_actual: tuple[int, int] | None, fuente_actual: str, camara: str = "principal", rotacion_actual: int = 0) -> dict:
-    """Estado de la calibración: si existe y si sigue vigente para la cámara tal como está ahora.
+def estado(
+    resolucion_actual: tuple[int, int] | None,
+    fuente_actual: str,
+    camara: str = "principal",
+    rotacion_actual: int = 0,
+    perfil: str | None = None,
+) -> dict:
+    """Estado de la calibración de `perfil` (el activo, si no se da ninguno): si existe y si sigue vigente para la cámara tal como está ahora.
 
     Args:
         resolucion_actual: `(ancho, alto)` que entrega la cámara ahora, o `None` si no se pudo capturar.
@@ -200,13 +215,13 @@ def estado(resolucion_actual: tuple[int, int] | None, fuente_actual: str, camara
         `{calibrada, vigente, motivo_no_vigente, esquinas, fecha, resolucion, fuente, advertencias}`. `vigente` es `None` cuando
         no se puede verificar (cámara sin imagen).
     """
-    esquinas = _esquinas_guardadas(camara)
+    esquinas = _esquinas_guardadas(camara, perfil)
     if esquinas is None:
         return {
             "calibrada": False, "vigente": False, "motivo_no_vigente": "Todavía no se calibró el tablero.",
             "esquinas": None, "fecha": None, "resolucion": None, "fuente": None, "advertencias": [],
         }
-    metadata = _leer_metadata(esquinas, camara)
+    metadata = _leer_metadata(esquinas, camara, perfil)
     base = {"calibrada": True, "esquinas": esquinas}
     if metadata is None:
         return {
@@ -233,8 +248,9 @@ def estado(resolucion_actual: tuple[int, int] | None, fuente_actual: str, camara
     return {**datos, "vigente": True, "motivo_no_vigente": None}
 
 
-def comprobar_movimiento(actual: np.ndarray, camara: str = "principal") -> dict:
-    """Compara una foto nueva con la de referencia de la calibración para avisar si la cámara (o el tablero) se movió.
+def comprobar_movimiento(actual: np.ndarray, camara: str = "principal", perfil: str | None = None) -> dict:
+    """Compara una foto nueva con la de referencia de la calibración (del perfil activo, si no se da ninguno) para avisar si la
+    cámara (o el tablero) se movió.
 
     Empareja puntos de interés (ORB) entre las dos fotos, estima el desplazamiento global con RANSAC y mide cuánto se corrieron
     las cuatro esquinas calibradas. Ignora las piezas que cambiaron de lugar porque RANSAC se queda con lo que no se movió.
@@ -243,9 +259,9 @@ def comprobar_movimiento(actual: np.ndarray, camara: str = "principal") -> dict:
         `{movida, desplazamiento_px, coincidencias, mensaje}`. `movida` es `None` si no se pudo comparar (sin calibración o con
         referencia, pocas coincidencias por luz distinta o manos en la foto).
     """
-    esquinas = _esquinas_guardadas(camara)
-    referencia = cv2.imread(str(ruta_referencia(camara))) if ruta_referencia(camara).exists() else None
-    if esquinas is None or referencia is None or _leer_metadata(esquinas, camara) is None:
+    esquinas = _esquinas_guardadas(camara, perfil)
+    referencia = cv2.imread(str(ruta_referencia(camara, perfil))) if ruta_referencia(camara, perfil).exists() else None
+    if esquinas is None or referencia is None or _leer_metadata(esquinas, camara, perfil) is None:
         return {"movida": None, "desplazamiento_px": None, "coincidencias": 0, "mensaje": "No hay una calibración con foto de referencia para comparar."}
     if actual.shape[:2] != referencia.shape[:2]:
         return {

@@ -1,5 +1,9 @@
 """Endpoints de la calibración de la cámara (proceso A del PLAN_CAMARA.md): asistente de calibración con metadata, vigencia y
-comprobación de que la cámara no se movió. Conviven con `GET/PUT/DELETE /vision/calibracion` de `ruta_vision.py`, que siguen igual."""
+comprobación de que la cámara no se movió. Conviven con `GET/PUT/DELETE /vision/calibracion` de `ruta_vision.py`, que siguen igual.
+
+Cada cámara puede tener más de un tablero físico calibrado (`/perfiles`, `/perfiles/activar`, `/perfiles/{perfil}`): sirve para no
+perder la calibración de un tablero al armar la de otro. Los demás endpoints toman un `perfil` opcional; sin él, actúan sobre el
+activo ahora (`tablero.perfil_activo`)."""
 from __future__ import annotations
 
 import json
@@ -8,7 +12,12 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 
-from backend.esquemas.vision_esquema import ComprobarCalibracionResponse, EstadoCalibracionResponse
+from backend.esquemas.vision_esquema import (
+    ComprobarCalibracionResponse,
+    EstadoCalibracionResponse,
+    PerfilesTableroResponse,
+    PerfilTableroResponse,
+)
 from backend.rutas.ruta_auth import get_current_principal
 from backend.rutas.ruta_vision import _leer_foto_subida, _validar_esquinas
 from backend.servicios.vision import calibracion_camara, tablero, unificada
@@ -45,10 +54,13 @@ def _fuera_de_la_foto(puntos: dict[str, tuple[float, float]], ancho: int, alto: 
 
 
 @router.get("/estado", response_model=EstadoCalibracionResponse)
-def estado_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> EstadoCalibracionResponse:
+def estado_calibracion(
+    camara: str = "principal", perfil: str | None = None, _facilitador_id: int = Depends(get_current_principal)
+) -> EstadoCalibracionResponse:
     """Si el tablero está calibrado y si la calibración sigue vigente para la cámara actual (resolución y fuente).
 
-    Saca una foto para conocer la resolución; si la cámara no responde, `vigente` queda en `null` con el motivo.
+    Sin `perfil`, el activo ahora (ver `GET /vision/calibracion/perfiles`). Saca una foto para conocer la resolución; si la
+    cámara no responde, `vigente` queda en `null` con el motivo.
     """
     _camara_valida(camara)
     try:
@@ -56,18 +68,77 @@ def estado_calibracion(camara: str = "principal", _facilitador_id: int = Depends
         resolucion: tuple[int, int] | None = (int(ancho), int(alto))
     except Exception:
         resolucion = None
-    return EstadoCalibracionResponse(
-        **calibracion_camara.estado(resolucion, str(_fuente_por_defecto(camara)), camara, servicio_camara.rotacion_actual(camara))
+    datos = calibracion_camara.estado(
+        resolucion, str(_fuente_por_defecto(camara)), camara, servicio_camara.rotacion_actual(camara), perfil
     )
+    return EstadoCalibracionResponse(**datos, perfil=perfil or tablero.perfil_activo(camara))
 
 
 @router.delete("/quitar", response_model=EstadoCalibracionResponse)
-def quitar_calibracion(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> EstadoCalibracionResponse:
-    """Borra la calibración de `camara` (esquinas, metadata y foto de referencia). La principal vuelve a la detección automática."""
+def quitar_calibracion(
+    camara: str = "principal", perfil: str | None = None, _facilitador_id: int = Depends(get_current_principal)
+) -> EstadoCalibracionResponse:
+    """Borra la calibración de `perfil` en `camara` (esquinas, metadata y foto de referencia); sin `perfil`, el activo ahora.
+    Con el tablero por defecto, la principal vuelve a la detección automática."""
     _camara_valida(camara)
-    for archivo in (tablero.archivo_esquinas(camara), calibracion_camara.ruta_metadata(camara), calibracion_camara.ruta_referencia(camara)):
+    for archivo in (
+        tablero.archivo_esquinas(camara, perfil),
+        calibracion_camara.ruta_metadata(camara, perfil),
+        calibracion_camara.ruta_referencia(camara, perfil),
+    ):
         archivo.unlink(missing_ok=True)
-    return EstadoCalibracionResponse(**calibracion_camara.estado(None, str(_fuente_por_defecto(camara)), camara, servicio_camara.rotacion_actual(camara)))
+    datos = calibracion_camara.estado(None, str(_fuente_por_defecto(camara)), camara, servicio_camara.rotacion_actual(camara), perfil)
+    return EstadoCalibracionResponse(**datos, perfil=perfil or tablero.perfil_activo(camara))
+
+
+@router.get("/perfiles", response_model=PerfilesTableroResponse)
+def perfiles_de_tablero(camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)) -> PerfilesTableroResponse:
+    """Los tableros físicos calibrados (o calibrables) para `camara`: el por defecto siempre primero, exista o no todavía.
+
+    Sirve para calibrar más de un tablero sin perder la calibración de los otros y cambiar entre ellos con «Activar», sin
+    tener que volver a marcar las esquinas cada vez que se cambia de mesa."""
+    activo = tablero.perfil_activo(camara)
+    perfiles = []
+    for nombre in tablero.listar_perfiles(camara):
+        esquinas = calibracion_camara._esquinas_guardadas(camara, nombre)
+        metadata = calibracion_camara._leer_metadata(esquinas, camara, nombre) if esquinas else None
+        perfiles.append(
+            PerfilTableroResponse(nombre=nombre, activo=nombre == activo, calibrada=esquinas is not None, fecha=metadata["fecha"] if metadata else None)
+        )
+    return PerfilesTableroResponse(perfiles=perfiles)
+
+
+@router.post("/perfiles/activar", response_model=EstadoCalibracionResponse)
+def activar_perfil_de_tablero(
+    camara: str = "principal", perfil: str = "default", _facilitador_id: int = Depends(get_current_principal)
+) -> EstadoCalibracionResponse:
+    """Hace que `camara` use, desde ahora, la calibración de `perfil` (sin recalibrar nada). 404 si ese tablero nunca se calibró
+    (el por defecto siempre se puede activar, calibrado o no: ahí cae la detección automática de la principal)."""
+    _camara_valida(camara)
+    if perfil != tablero.PERFIL_POR_DEFECTO and calibracion_camara._esquinas_guardadas(camara, perfil) is None:
+        raise HTTPException(status_code=404, detail=f"El tablero «{perfil}» no tiene una calibración guardada")
+    tablero.establecer_perfil_activo(camara, perfil)
+    try:
+        alto, ancho = capturar_foto_tablero(camara=camara).shape[:2]
+        resolucion: tuple[int, int] | None = (int(ancho), int(alto))
+    except Exception:
+        resolucion = None
+    datos = calibracion_camara.estado(resolucion, str(_fuente_por_defecto(camara)), camara, servicio_camara.rotacion_actual(camara), perfil)
+    return EstadoCalibracionResponse(**datos, perfil=perfil)
+
+
+@router.delete("/perfiles/{perfil}", response_model=PerfilesTableroResponse)
+def borrar_perfil_de_tablero(
+    perfil: str, camara: str = "principal", _facilitador_id: int = Depends(get_current_principal)
+) -> PerfilesTableroResponse:
+    """Borra el tablero `perfil` de `camara` (esquinas, metadata y foto de referencia); si era el activo, vuelve al por defecto.
+    400 si `perfil` es `"default"`: ese se borra con `DELETE /vision/calibracion/quitar`, no se elimina de la lista."""
+    _camara_valida(camara)
+    try:
+        tablero.borrar_perfil(camara, perfil)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return perfiles_de_tablero(camara, _facilitador_id)
 
 
 @router.get("/unificada")
@@ -194,12 +265,15 @@ async def guardar_calibracion(
     esquinas: str = Form(...),
     foto: UploadFile = File(...),
     camara: str = Form("principal"),
+    perfil: str | None = Form(None),
     _facilitador_id: int = Depends(get_current_principal),
 ) -> EstadoCalibracionResponse:
     """Guarda las esquinas con la metadata de la sesión (resolución de la foto, cámara, fecha) y la foto de referencia.
 
-    Los errores graves (esquinas no convexas, fuera de la foto) son 422; lo dudoso (tablero muy chico, muy inclinado, esquina
-    pegada al borde, a1 en una casilla clara) se guarda igual y vuelve en `advertencias`.
+    Con `perfil` (un nombre de tablero nuevo o ya armado) la calibración se guarda aparte, sin pisar la de los demás tableros
+    de `camara`, y pasa a ser la activa; sin `perfil`, se guarda (y se pisa) la que esté activa ahora. Los errores graves
+    (esquinas no convexas, fuera de la foto) son 422; lo dudoso (tablero muy chico, muy inclinado, esquina pegada al borde, a1
+    en una casilla clara) se guarda igual y vuelve en `advertencias`.
     """
     puntos = _esquinas_de_formulario(esquinas)
     imagen = await _leer_foto_subida(foto)
@@ -212,14 +286,18 @@ async def guardar_calibracion(
     advertencias = calibracion_camara.evaluar_calidad(puntos, (ancho, alto), imagen)
     fuente = str(_fuente_por_defecto(camara))
     rotacion = servicio_camara.rotacion_actual(camara)
-    calibracion_camara.guardar_calibracion(puntos, imagen, fuente, advertencias, camara, rotacion)
-    return EstadoCalibracionResponse(**calibracion_camara.estado((int(ancho), int(alto)), fuente, camara, rotacion))
+    calibracion_camara.guardar_calibracion(puntos, imagen, fuente, advertencias, camara, rotacion, perfil)
+    if perfil is not None:
+        tablero.establecer_perfil_activo(camara, perfil)
+    datos = calibracion_camara.estado((int(ancho), int(alto)), fuente, camara, rotacion, perfil)
+    return EstadoCalibracionResponse(**datos, perfil=perfil or tablero.perfil_activo(camara))
 
 
 @router.post("/comprobar", response_model=ComprobarCalibracionResponse)
 async def comprobar_calibracion(
     foto: UploadFile | None = File(None),
     camara: str = Form("principal"),
+    perfil: str | None = Form(None),
     _facilitador_id: int = Depends(get_current_principal),
 ) -> ComprobarCalibracionResponse:
     """Compara una foto nueva (la subida, o una de la cámara fija) con la de referencia: avisa si la cámara se movió."""
@@ -231,4 +309,4 @@ async def comprobar_calibracion(
             imagen = capturar_foto_tablero(camara=camara)
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
-    return ComprobarCalibracionResponse(**calibracion_camara.comprobar_movimiento(imagen, camara))
+    return ComprobarCalibracionResponse(**calibracion_camara.comprobar_movimiento(imagen, camara, perfil))

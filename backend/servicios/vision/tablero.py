@@ -40,12 +40,101 @@ ORDEN_DE_ENDEREZADO = ("a8", "h8", "h1", "a1")
 """Orden que espera `enderezar_tablero` (arriba-izq, arriba-der, abajo-der, abajo-izq del diagrama): blancas abajo, a8 arriba a la izquierda."""
 
 
-def archivo_esquinas(camara: str = "principal") -> Path:
-    """Archivo de esquinas de `camara`: el de siempre (`ARCHIVO_ESQUINAS`) para la principal y `<nombre>_<camara>.json` al lado para las
-    demás. Se calcula en cada llamada, así una prueba que redirija `ARCHIVO_ESQUINAS` a una carpeta temporal aísla todas."""
+PERFIL_POR_DEFECTO = "default"
+"""Nombre del perfil de tablero que usa toda instalación que todavía no armó uno aparte: sus archivos son los de siempre
+(sin esto, cada instalación existente tendría que recalibrar)."""
+
+
+def _archivo_esquinas_base(camara: str = "principal") -> Path:
+    """El archivo de esquinas de `camara` con el perfil por defecto: el de siempre (`ARCHIVO_ESQUINAS`) para la principal y
+    `<nombre>_<camara>.json` al lado para las demás."""
     if camara == "principal":
         return ARCHIVO_ESQUINAS
     return ARCHIVO_ESQUINAS.with_name(f"{ARCHIVO_ESQUINAS.stem}_{camara}{ARCHIVO_ESQUINAS.suffix}")
+
+
+def _nombre_de_perfil_seguro(perfil: str) -> str:
+    """`perfil` como nombre de archivo: solo letras, números, guion y guion bajo (lo que se escriba en la pantalla puede traer
+    espacios, tildes o barras)."""
+    limpio = "".join(c if c.isalnum() or c in "-_" else "_" for c in perfil.strip()).strip("_")
+    if not limpio:
+        raise ValueError("El nombre del tablero no puede quedar vacío")
+    return limpio[:40]
+
+
+def archivo_perfiles_activos() -> Path:
+    """Qué perfil de tablero está activo ahora para cada cámara (`{"principal": "default", "secundaria": "mesa_2"}`). Un solo
+    archivo chico, local de la instalación, igual que `ARCHIVO_ESQUINAS`."""
+    return ARCHIVO_ESQUINAS.with_name("perfiles_activos.json")
+
+
+def perfil_activo(camara: str = "principal") -> str:
+    """El perfil de tablero que usa ahora el reconocimiento para `camara`: `PERFIL_POR_DEFECTO` si nunca se armó ni se activó otro."""
+    try:
+        datos = json.loads(archivo_perfiles_activos().read_text(encoding="utf-8"))
+        return str(datos.get(camara) or PERFIL_POR_DEFECTO)
+    except (OSError, ValueError, KeyError, TypeError):
+        return PERFIL_POR_DEFECTO
+
+
+def establecer_perfil_activo(camara: str, perfil: str) -> None:
+    """Hace que, desde ahora, el reconocimiento de `camara` use la calibración de `perfil` (sin recalibrar nada)."""
+    ruta = archivo_perfiles_activos()
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        datos = {}
+    datos[camara] = perfil
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    ruta.write_text(json.dumps(datos, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def archivo_esquinas(camara: str = "principal", perfil: str | None = None) -> Path:
+    """Archivo de esquinas de `camara` para `perfil` (el activo ahora, si no se da ninguno).
+
+    Con `PERFIL_POR_DEFECTO` es el de siempre (compatible con cualquier instalación existente); con otro nombre es un tablero
+    aparte, calibrado y guardado sin pisar al anterior (`<nombre>[_<camara>]__<perfil>.json`). Se calcula en cada llamada, así
+    una prueba que redirija `ARCHIVO_ESQUINAS` a una carpeta temporal aísla todas."""
+    base = _archivo_esquinas_base(camara)
+    perfil = perfil if perfil is not None else perfil_activo(camara)
+    if perfil == PERFIL_POR_DEFECTO:
+        return base
+    return base.with_name(f"{base.stem}__{_nombre_de_perfil_seguro(perfil)}{base.suffix}")
+
+
+def listar_perfiles(camara: str = "principal") -> list[str]:
+    """Los nombres de los perfiles de tablero de `camara`: `PERFIL_POR_DEFECTO` primero (exista o no todavía), los demás
+    ordenados alfabéticamente."""
+    base = _archivo_esquinas_base(camara)
+    if not base.parent.exists():
+        return [PERFIL_POR_DEFECTO]
+    prefijo = f"{base.stem}__"
+    # El glob también agarra, con el mismo prefijo y la misma extensión ".json", el archivo de metadata de cada perfil
+    # (`<prefijo><perfil>.meta.json`): se descarta por tener un "." de más en lo que seguiría al prefijo (un nombre de
+    # perfil nunca lo tiene, ver `_nombre_de_perfil_seguro`).
+    encontrados = sorted(
+        archivo.stem[len(prefijo):]
+        for archivo in base.parent.glob(f"{prefijo}*{base.suffix}")
+        if archivo.stem.startswith(prefijo) and "." not in archivo.stem[len(prefijo):]
+    )
+    return [PERFIL_POR_DEFECTO, *encontrados]
+
+
+def borrar_perfil(camara: str, perfil: str) -> None:
+    """Borra las esquinas, la metadata y la foto de referencia de `perfil` (no el `PERFIL_POR_DEFECTO`: para ese está
+    `DELETE /vision/calibracion/quitar`). Si era el activo, `camara` vuelve al perfil por defecto."""
+    if perfil == PERFIL_POR_DEFECTO:
+        raise ValueError("El tablero por defecto no se borra acá: usá «Quitar calibración»")
+    from backend.servicios.vision import calibracion_camara
+
+    for archivo in (
+        archivo_esquinas(camara, perfil),
+        calibracion_camara.ruta_metadata(camara, perfil),
+        calibracion_camara.ruta_referencia(camara, perfil),
+    ):
+        archivo.unlink(missing_ok=True)
+    if perfil_activo(camara) == perfil:
+        establecer_perfil_activo(camara, PERFIL_POR_DEFECTO)
 
 
 def guardar_esquinas_calibradas(esquinas: dict[str, tuple[float, float]], ruta: Path | None = None) -> None:

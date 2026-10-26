@@ -232,6 +232,72 @@ def test_ajustar_esquinas_las_mejora_y_las_guarda(cliente, tmp_path, monkeypatch
     assert cliente.post("/vision/calibracion/ajustar?camara=principal").json()["aplicada"] is False  # ya no hay nada que mejorar
 
 
+def test_perfiles_arranca_con_solo_el_por_defecto(cliente) -> None:
+    cuerpo = cliente.get("/vision/calibracion/perfiles").json()
+    assert cuerpo["perfiles"] == [{"nombre": "default", "activo": True, "calibrada": False, "fecha": None}]
+
+
+def test_guardar_con_perfil_nuevo_no_pisa_el_por_defecto_y_queda_activo(cliente) -> None:
+    _guardar(cliente)  # calibra el perfil por defecto
+    otras = {"a1": [420, 610], "h1": [910, 620], "h8": [900, 120], "a8": [420, 110]}
+    respuesta = cliente.post(
+        "/vision/calibracion/guardar",
+        data={"esquinas": json.dumps(otras), "perfil": "mesa_2"},
+        files={"foto": ("foto.png", _jpeg(_foto()), "image/png")},
+    )
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert cuerpo["perfil"] == "mesa_2" and cuerpo["calibrada"] is True
+
+    # El por defecto sigue exactamente como se guardó antes: no se pisó.
+    estado_default = cliente.get("/vision/calibracion/estado", params={"perfil": "default"}).json()
+    assert estado_default["calibrada"] is True and estado_default["esquinas"]["h1"] == [900.0, 610.0]
+
+    # Y ahora es "mesa_2" el que está activo (sin pasar perfil, el estado lee el activo).
+    estado_activo = cliente.get("/vision/calibracion/estado").json()
+    assert estado_activo["perfil"] == "mesa_2" and estado_activo["esquinas"]["h1"] == [910.0, 620.0]
+
+    perfiles = {p["nombre"]: p for p in cliente.get("/vision/calibracion/perfiles").json()["perfiles"]}
+    assert set(perfiles) == {"default", "mesa_2"}
+    assert perfiles["mesa_2"]["activo"] is True and perfiles["default"]["activo"] is False
+
+
+def test_activar_perfil_vuelve_al_tablero_elegido_sin_recalibrar(cliente) -> None:
+    _guardar(cliente)
+    otras = {"a1": [420, 610], "h1": [910, 620], "h8": [900, 120], "a8": [420, 110]}
+    cliente.post(
+        "/vision/calibracion/guardar",
+        data={"esquinas": json.dumps(otras), "perfil": "mesa_2"},
+        files={"foto": ("foto.png", _jpeg(_foto()), "image/png")},
+    )
+    respuesta = cliente.post("/vision/calibracion/perfiles/activar", params={"camara": "principal", "perfil": "default"})
+    assert respuesta.status_code == 200
+    assert respuesta.json()["perfil"] == "default" and respuesta.json()["esquinas"]["h1"] == [900.0, 610.0]
+    assert cliente.get("/vision/calibracion/estado").json()["esquinas"]["h1"] == [900.0, 610.0]
+
+
+def test_activar_perfil_inexistente_es_404(cliente) -> None:
+    assert cliente.post("/vision/calibracion/perfiles/activar", params={"perfil": "no_existe"}).status_code == 404
+
+
+def test_borrar_perfil_no_borra_el_por_defecto_y_cae_a_el_si_era_el_activo(cliente) -> None:
+    _guardar(cliente)
+    cliente.post(
+        "/vision/calibracion/guardar",
+        data={"esquinas": json.dumps(ESQUINAS), "perfil": "mesa_2"},
+        files={"foto": ("foto.png", _jpeg(_foto()), "image/png")},
+    )
+    assert cliente.get("/vision/calibracion/estado").json()["perfil"] == "mesa_2"
+
+    assert cliente.delete("/vision/calibracion/perfiles/default").status_code == 400
+
+    respuesta = cliente.delete("/vision/calibracion/perfiles/mesa_2")
+    assert respuesta.status_code == 200
+    assert [p["nombre"] for p in respuesta.json()["perfiles"]] == ["default"]
+    # Se quedó sin perfil activo: vuelve solo al por defecto.
+    assert cliente.get("/vision/calibracion/estado").json()["perfil"] == "default"
+
+
 def test_ajustar_esquinas_sin_damero_visible_es_409(cliente, tmp_path, monkeypatch) -> None:
     from backend.servicios.vision import camara
 
