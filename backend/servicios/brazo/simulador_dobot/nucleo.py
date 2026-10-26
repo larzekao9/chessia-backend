@@ -221,7 +221,7 @@ class Simulador:
             "z_tope": self.z_tope, "margen_agarre_mm": a.margen_agarre_mm, "giro_diagonal_grados": a.giro_diagonal_grados,
             "altura_segura_mm": a.altura_segura_mm, "fuerza": a.fuerza, "velocidad_pinza": a.velocidad_pinza,
             "aperturas_por_pieza": dict(a.aperturas_por_pieza), "apertura_aproximacion": a.apertura_aproximacion,
-            "z_agarre": self.z_tope + a.margen_agarre_mm,
+            "margenes_por_pieza": dict(a.margenes_por_pieza), "z_agarre": self.z_tope + a.margen_agarre_mm,
         }
 
     def actualizar_parametros(self, cambios: dict) -> dict:
@@ -230,7 +230,10 @@ class Simulador:
         Raises:
             ValueError: si un campo no existe o su valor no es válido (no se cambia nada).
         """
-        conocidos = {"z_tope", "margen_agarre_mm", "giro_diagonal_grados", "altura_segura_mm", "fuerza", "velocidad_pinza", "aperturas_por_pieza", "apertura_aproximacion"}
+        conocidos = {
+            "z_tope", "margen_agarre_mm", "giro_diagonal_grados", "altura_segura_mm", "fuerza", "velocidad_pinza",
+            "aperturas_por_pieza", "apertura_aproximacion", "margenes_por_pieza",
+        }
         desconocidos = sorted(set(cambios) - conocidos)
         if desconocidos:
             raise ValueError(f"parámetros desconocidos: {', '.join(desconocidos)}")
@@ -249,6 +252,19 @@ class Simulador:
                         else:
                             aperturas[str(tipo).lower()] = int(_numero(apertura, f"apertura de {tipo}", 0, 1000))
                     nuevos[clave] = aperturas
+                    continue
+                if clave == "margenes_por_pieza":
+                    if not isinstance(valor, dict):
+                        raise ValueError("margenes_por_pieza tiene que ser un objeto {pieza: margen_mm}")
+                    margenes = dict(self.agarre.margenes_por_pieza)
+                    for tipo, margen in valor.items():
+                        if str(tipo).lower() not in TIPOS_PIEZA:
+                            raise ValueError(f"pieza desconocida en margenes_por_pieza: {tipo}")
+                        if margen is None:
+                            margenes.pop(str(tipo).lower(), None)
+                        else:
+                            margenes[str(tipo).lower()] = float(_numero(margen, f"margen de {tipo}", 0.0, 30.0))
+                    nuevos[clave] = margenes
                     continue
                 rangos = {
                     "z_tope": (50.0, 700.0), "margen_agarre_mm": (0.0, 30.0), "giro_diagonal_grados": (-180.0, 180.0),

@@ -179,6 +179,8 @@ class ParametrosAgarre:
 
     z_tope: float | None = None
     margen_agarre_mm: float = 3.0
+    """Margen por defecto y del PEÓN (ver `margen_para`): si una pieza de otro tipo necesita bajar más o menos (su base tiene otra
+    altura), medila aparte y agregala a `margenes_por_pieza` — así no choca contra el tablero ni agarra la pieza demasiado arriba."""
     giro_diagonal_grados: float = 45.0
     apertura_aproximacion: int = 560
     """Posición de la pinza (0 a 1000) al bajar sobre un PEÓN: la apertura que dejó holgura a los lados sin rozar las vecinas."""
@@ -189,6 +191,11 @@ class ParametrosAgarre:
     """Cuánto más se abre la pinza al SOLTAR que al agarrar (se suma a la apertura de la pieza, tope 1000): así los dedos quedan bien lejos de la pieza."""
     aperturas_por_pieza: dict[str, int] = field(default_factory=dict)
     """Apertura de bajada de cada tipo de pieza (`"n"`, `"b"`, `"r"`, `"q"`, `"k"`): depende de su ancho máximo, y cada una se mide."""
+    margenes_por_pieza: dict[str, float] = field(default_factory=dict)
+    """Margen de agarre (mm sobre `z_tope`) de cada tipo de pieza (`"n"`, `"b"`, `"r"`, `"q"`, `"k"`): depende de la altura de su base,
+    y cada una se mide (igual que `aperturas_por_pieza`). Con un juego de piezas nuevo, la base de alguna puede ser más baja que la
+    del peón con la que se midió `margen_agarre_mm` — ahí la pinza choca contra el tablero antes de llegar a agarrarla, y hace
+    falta un margen propio más alto para esa pieza."""
     altura_segura_mm: float = 80.0
     """Altura sobre el agarre para trasladarse: los dedos pasan por encima del rey, la pieza más alta."""
     fuerza: int = 20
@@ -218,12 +225,25 @@ class ParametrosAgarre:
             return self.apertura_aproximacion
         raise RuntimeError(f"Falta la apertura de la pinza para la pieza '{tipo}': medí su ancho máximo y agregala a aperturas_por_pieza")
 
+    def margen_para(self, tipo_pieza: str) -> float:
+        """Margen de agarre (mm sobre `z_tope`) para `tipo_pieza`: el propio si está medido en `margenes_por_pieza`, si no el de
+        `margen_agarre_mm` (con el que se midió el peón)."""
+        return self.margenes_por_pieza.get(tipo_pieza.lower(), self.margen_agarre_mm)
+
     @property
     def z_agarre(self) -> float:
-        """Altura Z de trabajo de la punta de los dedos al agarrar o soltar. Falla si todavía no se midió el tope."""
+        """Altura Z de trabajo de la punta de los dedos al agarrar o soltar con el margen por defecto (el del peón). Falla si
+        todavía no se midió el tope. Para una pieza puntual usá `z_agarre_para`, que respeta su margen propio si lo tiene."""
         if self.z_tope is None:
             raise RuntimeError("Falta la altura del tablero (z_tope): apoyá las puntas de los dedos en el tablero y guardala con guardar_parametros_agarre")
         return self.z_tope + self.margen_agarre_mm
+
+    def z_agarre_para(self, tipo_pieza: str) -> float:
+        """Altura Z de trabajo de la punta de los dedos al agarrar o soltar una pieza de `tipo_pieza`, con su margen propio si lo
+        tiene (`margen_para`). Falla si todavía no se midió el tope."""
+        if self.z_tope is None:
+            raise RuntimeError("Falta la altura del tablero (z_tope): apoyá las puntas de los dedos en el tablero y guardala con guardar_parametros_agarre")
+        return self.z_tope + self.margen_para(tipo_pieza)
 
 
 def guardar_parametros_agarre(parametros: ParametrosAgarre, ruta: Path | None = None) -> None:

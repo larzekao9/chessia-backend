@@ -236,7 +236,8 @@ def parametros() -> dict:
         "fuerza": agarre.fuerza, "velocidad_pinza": agarre.velocidad_pinza, "apertura_aproximacion": agarre.apertura_aproximacion,
         "apertura_extra_soltar": agarre.apertura_extra_soltar, "largo_pinza_mm": agarre.largo_pinza_mm,
         "aperturas_por_pieza": dict(agarre.aperturas_por_pieza), "altura_segura_mm": agarre.altura_segura_mm,
-        "margen_agarre_mm": agarre.margen_agarre_mm, "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
+        "margen_agarre_mm": agarre.margen_agarre_mm, "margenes_por_pieza": dict(agarre.margenes_por_pieza),
+        "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
         "cementerio_origen": agarre.cementerio_origen, "cementerio_paso": agarre.cementerio_paso, "cementerio_paso_fila": agarre.cementerio_paso_fila,
         "cementerio_columnas": agarre.cementerio_columnas, "reservas": dict(agarre.reservas),
     }
@@ -257,6 +258,12 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
         elif clave == "aperturas_por_pieza":
             if not isinstance(valor, dict) or any(k not in "pnbrqk" or len(k) != 1 or not isinstance(v, int) or not 0 <= v <= 1000 for k, v in valor.items()):
                 raise ErrorControl(422, "aperturas_por_pieza: letras p n b r q k con valores de 0 a 1000")
+        elif clave == "margenes_por_pieza":
+            if not isinstance(valor, dict) or any(
+                k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 30
+                for k, v in valor.items()
+            ):
+                raise ErrorControl(422, "margenes_por_pieza: letras p n b r q k con valores de 0 a 30 (mm)")
         elif clave in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila"):
             if not (clave == "cementerio_origen" and valor is None) and not _es_par(valor):
                 raise ErrorControl(422, f"{clave} tiene que ser [x, y] en mm" + (" (o null)" if clave == "cementerio_origen" else ""))
@@ -685,7 +692,7 @@ def probar_apertura(casilla: str, tipo_pieza: str) -> dict:
     if ejecutor.posiciones_casillas is None or ejecutor.orientacion is None:
         raise ErrorControl(409, "El brazo no tiene calibración del tablero (calibracion_local/brazo.json)")
     try:
-        _ = ejecutor.parametros.z_agarre
+        ejecutor.parametros.z_agarre_para(tipo_pieza)
         ejecutor.parametros.apertura_para(tipo_pieza)
     except RuntimeError as error:
         raise ErrorControl(409, str(error)) from error
@@ -814,8 +821,8 @@ def _pasos_de_prueba(
         if captura:
             pasos.insert(0, Paso(tipo_capturada, d, cementerio(casilla_cementerio)))
     try:
-        _ = ejecutor.parametros.z_agarre
         for paso in pasos:
+            ejecutor.parametros.z_agarre_para(paso.pieza)
             ejecutor.parametros.apertura_para(paso.pieza)
             ejecutor._xy(paso.origen)
             ejecutor._xy(paso.destino)
