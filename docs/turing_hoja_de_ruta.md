@@ -90,6 +90,7 @@ Pero **usada como evaluador dentro de la búsqueda perdió contra la evaluación
 
 ## Límites declarados
 
+- La red solo ve las piezas (no derechos de enroque, captura al paso, contador de 50 jugadas ni repeticiones) y no distingue coronaciones; el detalle, la evidencia y el plan de la v7 están en [`turing_limites_y_plan_v7.md`](turing_limites_y_plan_v7.md).
 - La red sola imita jugadas de maestros pero no busca variantes: pierde contra Stockfish desde el nivel 5.
 - "Maestro 18" es una etiqueta de la escala del sistema (ELO de los datos de entrenamiento), no una fuerza medida.
 - Las mediciones actuales usan pocas partidas y un solo tiempo de Stockfish; sirven para comparar y ubicar el orden de magnitud.

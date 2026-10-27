@@ -8,6 +8,12 @@ from backend.servicios.estrategias.fabrica_estrategias import crear_estrategia_j
 POSICION_INICIAL = chess.STARTING_FEN
 
 
+@pytest.fixture(autouse=True)
+def _sin_apertura_variada(monkeypatch) -> None:
+    """Estas pruebas miran a qué función llega la jugada desde la posición inicial: con la apertura variada encendida el modo maestro iría por otro camino (se prueba aparte)."""
+    monkeypatch.setenv("AJEDREZ_TURING_APERTURA_VARIADA", "0")
+
+
 def test_crear_estrategia_jugada_motor_devuelve_estrategia_stockfish() -> None:
     estrategia = crear_estrategia_jugada("motor", nivel=5)
     assert isinstance(estrategia, EstrategiaStockfish)

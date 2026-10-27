@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from backend.modelos.tablas_orm import AmistadORM, InscripcionORM, UsuarioORM
 from backend.servicios.curso.servicio_reporte import nombre_publico
 from backend.servicios.social import en_linea
+from backend.servicios.social.elo import es_provisional
 
 _ALFABETO_CODIGO = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 _LONGITUD_CODIGO = 8
@@ -133,13 +134,15 @@ def pueden_jugar(db: Session, a: int, b: int) -> bool:
 
 
 def persona(usuario: UsuarioORM, relacion: str | None = None) -> dict:
-    """Lo que se le muestra a otro jugador de alguien: nombre abreviado, avatar, nivel y si está en línea."""
+    """Lo que se le muestra a otro jugador de alguien: nombre abreviado, avatar, nivel, Elo y si está en línea."""
     return {
         "id": usuario.id,
         "nombre": nombre_publico(usuario.nombre),
         "avatar_url": usuario.avatar_url,
         "nivel": usuario.nivel_estimado,
         "rango": usuario.rango_estimado,
+        "elo": usuario.elo,
+        "elo_provisional": es_provisional(usuario.partidas_elo),
         "en_linea": en_linea.esta_en_linea(usuario.id),
         "relacion": relacion,
     }

@@ -1,3 +1,4 @@
+from .desafio import DESAFIO_MAX, VENTANA_DESAFIO, calcular_desafio
 from .servicio_calibracion import (
     MAX_CALIBRACIONES_HISTORIAL,
     MIN_JUGADAS_CALIBRACION,
@@ -16,6 +17,9 @@ from .servicio_calibracion import (
 )
 
 __all__ = [
+    "DESAFIO_MAX",
+    "VENTANA_DESAFIO",
+    "calcular_desafio",
     "MAX_CALIBRACIONES_HISTORIAL",
     "MIN_JUGADAS_CALIBRACION",
     "MIN_JUGADAS_PARTIDA_VALIDA",

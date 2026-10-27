@@ -6,6 +6,52 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class ResultadosEntrePersonasResponse(BaseModel):
+    """Lo que ganó, empató y perdió un alumno contra otras personas."""
+
+    ganadas: int = 0
+    empatadas: int = 0
+    perdidas: int = 0
+
+
+class PuntoEloResponse(BaseModel):
+    """El Elo tras una partida (`numero` 0 es el punto de partida, sin resultado)."""
+
+    numero: int
+    fecha: str | None = None
+    elo: int
+    resultado: str | None = None
+
+
+class PuestoEnTorneoResponse(BaseModel):
+    """En qué puesto quedó el alumno en un torneo, sin nombrar a los demás."""
+
+    nombre: str
+    estado: str
+    puesto: int
+    de: int
+    puntos: float
+    partidas: int
+    victorias: int
+    fecha: str | None = None
+
+
+class CompetenciaAlumnoResponse(BaseModel):
+    """Su Elo y sus partidas con compañeros, separadas en amistosas (no mueven el Elo), puntuadas y de torneo."""
+
+    elo: int = 1000
+    partidas_elo: int = 0
+    elo_provisional: bool = True
+    elo_cambio_30_dias: int = 0
+    amistosas: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    puntuadas: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    torneos: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    total: int = 0
+    racha_derrotas: int = 0
+    serie_elo: list[PuntoEloResponse] = []
+    puestos_en_torneos: list[PuestoEnTorneoResponse] = []
+
+
 class PuntoSerieResponse(BaseModel):
     numero: int
     fecha: str
@@ -86,6 +132,7 @@ class InformeAlumnoResponse(BaseModel):
     precision_por_fase: list[FasePrecisionResponse]
     errores_frecuentes: list[ErrorFrecuenteResponse]
     medallas: dict[str, Any]
+    competencia: CompetenciaAlumnoResponse | None = None
     lectura: list[str]
 
 
@@ -108,6 +155,19 @@ class FilaGrupoResponse(BaseModel):
     partidas_30_dias: int
     ultima_partida: str | None
     dias_sin_jugar: int | None
+    estado_actividad: str = "sin_empezar"
+    """Semáforo de constancia: `verde`, `amarillo`, `rojo` o `sin_empezar`."""
+    atencion: list[str] = []
+    """Por qué conviene mirar hoy a este alumno (vacío si no hace falta)."""
+    elo: int = 1000
+    partidas_elo: int = 0
+    elo_provisional: bool = True
+    elo_cambio_30_dias: int = 0
+    amistosas: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    puntuadas: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    torneos: ResultadosEntrePersonasResponse = ResultadosEntrePersonasResponse()
+    partidas_companeros: int = 0
+    racha_derrotas: int = 0
     es_menor: bool | None = None
     tutor_nombre: str | None = None
     tutor_telefono: str | None = None
@@ -135,14 +195,43 @@ class ResumenGrupoResponse(BaseModel):
     activos_30_dias: int
     sin_actividad: int
     dias_sin_actividad: int
+    necesitan_atencion: int = 0
+    semaforo: dict[str, int] = {}
+    elo_promedio: float | None = None
+    partidas_companeros: int = 0
+
+
+class FaseDelGrupoResponse(BaseModel):
+    fase: str
+    jugadas: int
+    precision: float | None
+
+
+class ErrorDelGrupoResponse(BaseModel):
+    tipo: str
+    nombre: str
+    cantidad: int
+
+
+class PlanDeClaseResponse(BaseModel):
+    """Qué conviene enseñar al grupo: en qué fase se acierta menos y qué errores se repiten (frases fijas, sin modelo de lenguaje)."""
+
+    alumnos_con_datos: int
+    alumnos_leidos: int = 0
+    alumnos_totales: int = 0
+    fases: list[FaseDelGrupoResponse]
+    errores: list[ErrorDelGrupoResponse]
+    fase_mas_debil: str | None = None
+    sugerencias: list[str]
 
 
 class ProgresoGrupoResponse(BaseModel):
-    """El antes y el después de un curso o de una institución: un resumen y una fila por alumno."""
+    """El antes y el después de un curso o de una institución: un resumen y una fila por alumno. En un curso trae además el plan de clase."""
 
     nombre: str
     resumen: ResumenGrupoResponse
     alumnos: list[FilaGrupoResponse]
+    plan_de_clase: PlanDeClaseResponse | None = None
 
 
 class SaludInstitucionResponse(BaseModel):

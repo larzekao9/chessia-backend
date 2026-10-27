@@ -13,6 +13,7 @@ from backend.esquemas.social_esquema import (
     AmigosResponse,
     AvisosResponse,
     BuscarRivalRequest,
+    MiEloResponse,
     BusquedaResponse,
     CrearRetoRequest,
     DenunciarRequest,
@@ -28,7 +29,7 @@ from backend.modelos.tablas_orm import UsuarioORM
 from backend.rutas.ruta_auth import get_current_facilitador, get_current_user, get_db
 from backend.servicios.auth import get_user_by_id
 from backend.database import fecha_a_iso
-from backend.servicios.social import amigos, emparejamiento, en_linea, moderacion, reglas, retos, supervision, torneos
+from backend.servicios.social import amigos, elo, emparejamiento, en_linea, moderacion, reglas, retos, supervision, torneos
 from backend.servicios.social.amigos import ErrorSocial
 
 router = APIRouter(prefix="/social", tags=["social"])
@@ -147,7 +148,7 @@ def quitar_amigo(usuario_id: int, usuario: UsuarioORM = Depends(get_jugador), db
 def retar(datos: CrearRetoRequest, usuario: UsuarioORM = Depends(get_jugador), db: Session = Depends(get_db)) -> RetoCreadoResponse:
     """Crea la sala con el reloj y el color elegidos y le avisa al retado. Solo a compañeros de curso o amigos (403). 409 si alguno ya está jugando."""
     try:
-        reto = retos.crear(db, usuario, datos.retado_id, datos.color, datos.control_tiempo_ms)
+        reto = retos.crear(db, usuario, datos.retado_id, datos.color, datos.control_tiempo_ms, puntuada=datos.puntuada)
     except ErrorSocial as error:
         raise _http(error) from error
     return RetoCreadoResponse(
@@ -258,11 +259,19 @@ def marcar_revisada(denuncia_id: int, facilitador_id: int = Depends(get_current_
 
 @router.post("/emparejamiento", response_model=BusquedaResponse, summary="Buscar un rival de mi nivel")
 def buscar_rival(datos: BuscarRivalRequest, usuario: UsuarioORM = Depends(get_jugador), db: Session = Depends(get_db)) -> BusquedaResponse:
-    """Me pone a buscar rival de nivel parecido y el mismo reloj, entre los de mi institución, mi curso o los que no están en ninguno."""
+    """Me pone a buscar rival del mismo reloj, entre los de mi institución, mi curso o los que no están en ninguno: de nivel parecido o, si pido filtros, dentro del rango de Elo y/o de
+    nivel que elegí (el otro jugador también tiene que aceptarme)."""
     try:
-        return BusquedaResponse(**emparejamiento.buscar(db, usuario, datos.control_tiempo_ms))
+        filtros = {clave: getattr(datos, clave) for clave in emparejamiento.CLAVES_DE_FILTRO}
+        return BusquedaResponse(**emparejamiento.buscar(db, usuario, datos.control_tiempo_ms, filtros, puntuada=datos.puntuada))
     except ErrorSocial as error:
         raise _http(error) from error
+
+
+@router.get("/mi-elo", response_model=MiEloResponse, summary="Mi Elo y mis últimas partidas contra otras personas")
+def mi_elo(usuario: UsuarioORM = Depends(get_jugador), db: Session = Depends(get_db)) -> MiEloResponse:
+    """El Elo del jugador (empieza en 1000), cuántas partidas lo movieron, si todavía es provisional y su historial reciente."""
+    return MiEloResponse(elo=usuario.elo, partidas=usuario.partidas_elo, provisional=elo.es_provisional(usuario.partidas_elo), historial=elo.historial(db, usuario.id))
 
 
 @router.delete("/emparejamiento", status_code=status.HTTP_204_NO_CONTENT, summary="Dejar de buscar rival")

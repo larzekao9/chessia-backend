@@ -97,6 +97,9 @@ class UsuarioResponse(BaseModel):
     avatar_url: str | None = None
     nivel_estimado: int | None = None
     rango_estimado: str | None = None
+    elo: int = 1000
+    partidas_elo: int = 0
+    """El Elo del jugador (empieza en 1000) y cuántas partidas contra otras personas lo movieron."""
     edad: int | None = None
     es_menor: bool | None = None
     """`True` si tiene menos de 18 años; `None` si no se sabe su edad."""
@@ -108,6 +111,8 @@ class UsuarioResponse(BaseModel):
     diagnostico_completado: bool = False
     partidas_calibradas: int = 0
     partidas_diagnostico: int = 3
+    desafio_turing: int = 0
+    """Niveles (0 a 3) que Turing suma al nivel del jugador según sus últimas 5 partidas contra él (ver `servicios/calibracion/desafio.py`)."""
     activo: bool = True
     es_principal: bool = False
     es_admin_institucion: bool = False

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 import chess
 
-from backend.modelos.partida import Partida
+from backend.modelos.partida import Partida, fin_por_reglas
 from backend.repositorios.repositorio_partida import RepositorioPartidas, crear_repositorio_partidas
 from backend.servicios.brazo.servicio_brazo import ejecutar_respuesta_en_brazo
 from backend.servicios.estrategias.fabrica_estrategias import TIPOS_SOPORTADOS, crear_estrategia_jugada
@@ -395,7 +395,9 @@ def terminar_por_tiempo(partida_id: str, lado: str) -> Partida:
         raise ValueError("La partida ya terminó")
     if not partida.tablero.move_stack:
         raise ValueError("Una partida sin jugadas no puede terminar por tiempo")
-    partida.resultado_por_tiempo = "0-1" if lado == "blancas" else "1-0"
+    # Se queda sin tiempo y pierde, salvo que el rival no tenga material para dar mate: entonces son tablas (regla de la FIDE).
+    rival_sin_material = partida.tablero.has_insufficient_material(chess.BLACK if lado == "blancas" else chess.WHITE)
+    partida.resultado_por_tiempo = "1/2-1/2" if rival_sin_material else ("0-1" if lado == "blancas" else "1-0")
     if partida.control_tiempo_ms:
         if lado == "blancas":
             partida.tiempo_blancas_ms = 0
@@ -481,7 +483,7 @@ def mover(
     jugada_motor_san = None
     tiempo_rival_ms: int | None = None
     error_brazo: str | None = None
-    if not tablero_intento.is_game_over():
+    if not fin_por_reglas(tablero_intento):
         estrategia = crear_estrategia_jugada(partida.tipo_oponente, nivel=partida.nivel)
         fen_antes_motor = tablero_intento.fen()
         inicio_decision = time.perf_counter()

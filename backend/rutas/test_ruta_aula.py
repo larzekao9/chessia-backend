@@ -183,11 +183,31 @@ def test_el_docente_pausa_los_retos_del_curso_y_despues_los_reanuda(aula) -> Non
 
 # --- tablas --------------------------------------------------------------------------------------------------------------------------------
 
+PRELUDIO = "e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 d2d3 d7d6 c1g5 c8g4 b1c3 f8e7 d1d2 e8g8 e1c1 h7h6 g5h4 g7g5 h4g3 a7a6 h2h3".split()
+"""21 medias jugadas legales sin capturas ni repeticiones: la partida queda con el turno de las negras y ya se pueden ofrecer tablas."""
+
+
+def _jugar_preludio(cliente, gente, codigo, blancas="ana", negras="beto"):
+    for i, jugada in enumerate(PRELUDIO):
+        cliente.post(f"/sala/{codigo}/mover", json={"jugada": jugada}, headers=_h(gente, blancas if i % 2 == 0 else negras))
+
+
+def test_no_se_pueden_ofrecer_tablas_al_principio_de_la_partida(aula) -> None:
+    cliente, gente, _, _ = aula
+    codigo = _partida(cliente, gente)
+    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "e2e4"}, headers=_h(gente, "ana"))
+
+    muy_pronto = cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "beto"))
+
+    assert muy_pronto.status_code == 400 and "muy pronto" in muy_pronto.json()["detail"]
+    sala = cliente.get(f"/sala/{codigo}", headers=_h(gente, "beto")).json()
+    assert sala["tablas_ofrecidas_por"] is None and sala["medias_jugadas_para_tablas"] == 20
+
 
 def test_las_tablas_se_ofrecen_y_al_aceptarlas_la_partida_termina_empatada(aula) -> None:
     cliente, gente, _, _ = aula
     codigo = _partida(cliente, gente)
-    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "e2e4"}, headers=_h(gente, "ana"))
+    _jugar_preludio(cliente, gente, codigo)
 
     ofrecidas = cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "beto")).json()
     assert ofrecidas["tablas_ofrecidas_por"] == "negras" and ofrecidas["terminada"] is False
@@ -202,7 +222,7 @@ def test_las_tablas_se_ofrecen_y_al_aceptarlas_la_partida_termina_empatada(aula)
 def test_una_oferta_de_tablas_se_rechaza_caduca_con_una_jugada_y_no_se_repite_enseguida(aula) -> None:
     cliente, gente, _, _ = aula
     codigo = _partida(cliente, gente)
-    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "e2e4"}, headers=_h(gente, "ana"))
+    _jugar_preludio(cliente, gente, codigo)
     cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "beto"))
 
     rechazada = cliente.post(f"/sala/{codigo}/tablas/rechazar", headers=_h(gente, "ana")).json()
@@ -210,9 +230,9 @@ def test_una_oferta_de_tablas_se_rechaza_caduca_con_una_jugada_y_no_se_repite_en
     assert cliente.post(f"/sala/{codigo}/tablas/rechazar", headers=_h(gente, "ana")).status_code == 400  # ya no hay oferta
     assert cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "beto")).status_code == 400  # hay que esperar unas jugadas
 
-    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "e7e5"}, headers=_h(gente, "beto"))
+    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "b7b6"}, headers=_h(gente, "beto"))
     cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "ana"))  # ana ofrece
-    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "g1f3"}, headers=_h(gente, "ana"))  # y juega: su propia oferta caduca
+    cliente.post(f"/sala/{codigo}/mover", json={"jugada": "a2a3"}, headers=_h(gente, "ana"))  # y juega: su propia oferta caduca
     assert cliente.get(f"/sala/{codigo}", headers=_h(gente, "beto")).json()["tablas_ofrecidas_por"] is None
     assert cliente.post(f"/sala/{codigo}/tablas", headers=_h(gente, "caro")).status_code == 403  # un espectador no ofrece ni responde
 

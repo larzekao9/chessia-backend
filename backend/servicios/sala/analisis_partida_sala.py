@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 import threading
 
-from backend.modelos.partida import Partida
+from backend.modelos.partida import JUGADAS_SIN_PROGRESO_PARA_TABLAS, Partida, fin_por_reglas
 from backend.servicios.retroalimentacion.servicio_retroalimentacion import generar_resumen_partida
 
 _cache_analisis: dict[str, dict] = {}
@@ -37,9 +37,10 @@ def motivo_fin(partida: Partida) -> str | None:
         return "ausencia" if partida.control_tiempo_ms else "sin_respuesta"
     if not partida.terminada and partida.estado != "terminada":
         return None
-    if partida.resultado_por_tiempo == "1/2-1/2" and not partida.tablero.is_game_over():
-        return "acuerdo"
-    if partida.resultado_por_tiempo is not None and not partida.tablero.is_game_over():
+    if partida.resultado_por_tiempo == "1/2-1/2" and not fin_por_reglas(partida.tablero):
+        se_acabo_el_reloj = partida.control_tiempo_ms and (partida.tiempo_blancas_ms == 0 or partida.tiempo_negras_ms == 0)
+        return "tiempo_sin_material" if se_acabo_el_reloj else "acuerdo"
+    if partida.resultado_por_tiempo is not None and not fin_por_reglas(partida.tablero):
         sin_tiempo = partida.tiempo_negras_ms if partida.resultado_por_tiempo == "1-0" else partida.tiempo_blancas_ms
         return "tiempo" if partida.control_tiempo_ms and sin_tiempo == 0 else "abandono"
     tablero = partida.tablero
@@ -50,6 +51,8 @@ def motivo_fin(partida: Partida) -> str | None:
         or tablero.is_insufficient_material()
         or tablero.is_seventyfive_moves()
         or tablero.is_fivefold_repetition()
+        or tablero.is_repetition(3)
+        or tablero.halfmove_clock >= JUGADAS_SIN_PROGRESO_PARA_TABLAS
     ):
         return "tablas"
     return None

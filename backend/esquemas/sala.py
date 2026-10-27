@@ -14,6 +14,8 @@ class CrearSalaRequest(BaseModel):
     color: str = Field(default="aleatorio", pattern="^(blancas|negras|aleatorio)$")
     control_tiempo_ms: int = Field(default=0, ge=0, le=3_600_000)
     """Milisegundos por lado para toda la partida: `0` (sin reloj), `180000` (3 min), `300000` (5), `600000` (10) o `900000` (15)."""
+    puntuada: bool = True
+    """`True` si la partida mueve el Elo de los dos; `False` para una partida amistosa que no puntúa."""
 
 
 class JugadorSalaResponse(BaseModel):
@@ -26,6 +28,8 @@ class JugadorSalaResponse(BaseModel):
     nombre_publico: Optional[str] = None
     nivel: Optional[int] = None
     rango: Optional[str] = None
+    elo: Optional[int] = None
+    elo_provisional: bool = False
     ausente_s: Optional[int] = None
 
 
@@ -62,6 +66,12 @@ class SalaResponse(BaseModel):
     reloj_corre: bool = False
     """`True` si el reloj está corriendo (empieza cuando cada jugador movió una vez)."""
     tablas_ofrecidas_por: Optional[str] = None
+    elo: Optional[dict] = None
+    """Al terminar una partida que contó para el Elo: `{"blancas": {"antes", "despues", "cambio"}, "negras": {...}}`. `None` si no contó (muy corta, o sin resultado)."""
+    puntuada: bool = True
+    """`False` si es una partida amistosa: se juega igual pero no mueve el Elo."""
+    medias_jugadas_para_tablas: int = 20
+    """Medias jugadas (de ambos) que tiene que llevar la partida para poder ofrecer tablas; antes de eso el servidor rechaza la oferta."""
     """`"blancas"` o `"negras"` si ese jugador ofreció tablas y espera respuesta; `None` si no hay oferta."""
 
 

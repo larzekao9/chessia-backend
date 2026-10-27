@@ -139,6 +139,8 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
         "tutor_email": "VARCHAR",
         "autorizacion_tutor_en": "TIMESTAMP",
         "cuenta_gestionada": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "elo": "INTEGER NOT NULL DEFAULT 1000",
+        "partidas_elo": "INTEGER NOT NULL DEFAULT 0",
     },
     "institucion": {
         "es_demostracion": "BOOLEAN NOT NULL DEFAULT FALSE",
@@ -163,6 +165,7 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
         "fen_inicial": "VARCHAR",
         "es_demostracion": "BOOLEAN NOT NULL DEFAULT FALSE",
         "usa_brazo": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "puntuada": "BOOLEAN NOT NULL DEFAULT TRUE",
         "estado": "VARCHAR NOT NULL DEFAULT 'en_curso'",
         "iniciada_en": "TIMESTAMP",
         "actualizada_en": "TIMESTAMP",

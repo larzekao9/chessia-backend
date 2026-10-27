@@ -98,3 +98,5 @@ class NivelJugadorResponse(BaseModel):
     precision_siguiente_nivel: float | None = None
     calibraciones: list[CalibracionHistorialItem] = Field(default_factory=list)
     escala: EscalaNivelesResponse
+    desafio_turing: int = 0
+    """Niveles (0 a 3) que Turing suma al nivel del jugador según sus últimas 5 partidas contra él."""

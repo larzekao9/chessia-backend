@@ -20,9 +20,17 @@ from backend.esquemas.sala import (
 )
 from backend.rutas.ruta_auth import get_current_user, get_db
 from backend.servicios.curso.servicio_reporte import nombre_publico
+from backend.servicios.social.elo import cambios_de_sala, es_provisional
 from backend.servicios.sala import presencia_sala
 from backend.servicios.sala.analisis_partida_sala import motivo_fin
-from backend.servicios.sala.servicio_sala import oferta_de_tablas, ofrecer_o_aceptar_tablas, rechazar_tablas, reloj_corre, restantes_ms
+from backend.servicios.sala.servicio_sala import (
+    JUGADAS_MINIMAS_PARA_OFRECER_TABLAS,
+    oferta_de_tablas,
+    ofrecer_o_aceptar_tablas,
+    rechazar_tablas,
+    reloj_corre,
+    restantes_ms,
+)
 from backend.servicios.sala import (
     analisis_sala,
     abandonar,
@@ -82,6 +90,8 @@ def _jugador_de_sala(db: Session, partida, usuario_id: int | None) -> dict | Non
         "nombre_publico": nombre_publico(usuario.nombre),
         "nivel": usuario.nivel_estimado,
         "rango": usuario.rango_estimado,
+        "elo": usuario.elo,
+        "elo_provisional": es_provisional(usuario.partidas_elo),
         "ausente_s": int(sin_senal) if sin_senal is not None else None,
     }
 
@@ -118,6 +128,9 @@ def _partida_a_sala_response(db: Session, partida, usuario_id: int) -> SalaRespo
         tiempo_negras_ms=tiempo_negras,
         reloj_corre=reloj_corre(partida),
         tablas_ofrecidas_por=oferta_de_tablas(partida),
+        medias_jugadas_para_tablas=JUGADAS_MINIMAS_PARA_OFRECER_TABLAS,
+        puntuada=partida.puntuada,
+        elo=cambios_de_sala(db, partida.codigo_sala) if partida.codigo_sala and (partida.terminada or partida.estado in ("terminada", "abandonada")) else None,
     )
 
 
@@ -151,7 +164,7 @@ def crear_sala_endpoint(
     """
     _exigir_que_pueda_jugar_con_otros(db, usuario_id)
     try:
-        partida = crear_sala(usuario_id, datos.color, datos.control_tiempo_ms)
+        partida = crear_sala(usuario_id, datos.color, datos.control_tiempo_ms, puntuada=datos.puntuada)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _partida_a_sala_response(db, partida, usuario_id)
@@ -217,7 +230,8 @@ def presencia_sala_endpoint(
 @router.post("/{codigo}/tablas", response_model=SalaResponse)
 def ofrecer_tablas(codigo: str, usuario_id: int = Depends(get_current_user), db: Session = Depends(get_db)):
     """Ofrece tablas al rival o, si él ya ofreció, las acepta (la partida termina empatada). La oferta caduca apenas se juega una jugada, y después de ofrecer hay
-    que esperar 4 jugadas para volver a hacerlo. 403 si es espectador; 400 si la partida no está en curso o ya ofreció."""
+    que esperar 4 jugadas para volver a hacerlo. No se puede ofrecer antes de que cada uno lleve 10 jugadas. 403 si es espectador; 400 si la partida no está
+    en curso, ya ofreció o es muy pronto."""
     codigo = codigo.strip().upper()
     try:
         partida = ofrecer_o_aceptar_tablas(codigo, usuario_id)

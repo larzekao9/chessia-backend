@@ -17,6 +17,10 @@ Actualizado el 26 de octubre de 2026.
 
 - **Avisos y tareas:** publicá instrucciones y, si corresponde, el enlace a una clase en vivo. Las metas cuentan lo que se juega desde que se crean hasta su vencimiento.
 - **Seguimiento:** revisá quién no empezó, dejó de practicar o bajó su nivel. Abrí el borrador de WhatsApp o correo al responsable para ofrecer ayuda.
+- **Tablero del curso:** en el reporte del curso ves a todos a la vez. Arriba, cuántos necesitan atención y cuántos están al día; abajo, **Para mirar hoy** (a quién mirar y por qué),
+  **Para la próxima clase** (en qué fase de la partida se falla más y qué error se repite) y tres pestañas: **Aprendizaje** (antes y después), **Competencia** (Elo y resultados con
+  compañeros, con las amistosas aparte) y **Constancia** (semáforo de quién juega). El ranking por Elo es para vos: pensalo antes de mostrarlo al grupo.
+- **Informe para la familia:** incluye el progreso del alumno contra sí mismo y cómo le va jugando con compañeros (Elo y resultados), sin nombres de otros chicos.
 - El alumno ve todo en **Mi aula**. En **Mi perfil** puede completar edad/contactos, cambiar su clave y consultar su progreso.
 - El informe individual permite imprimir/guardar PDF y abrir un resumen dirigido al contacto familiar. No envía mensajes automáticamente ni adjunta el PDF por sí solo.
 - **Modo clase:** pausa nuevos retos y salas entre alumnos mientras explica el docente. Las partidas empezadas continúan y la práctica individual sigue disponible.
@@ -27,7 +31,8 @@ En **Aula → Torneo**, armá el torneo, inscribí a los alumnos y empezá la ro
 Cada uno recibe un aviso para ir a su sala; el reloj corre desde que se arma la ronda. Esperá los resultados antes de pasar a la siguiente.
 Forzar una ronda o cerrar un torneo deja sin puntos las partidas pendientes.
 
-Los jugadores pueden ofrecer tablas, bloquear o denunciar desde sus partidas o la lista de jugadores. Las denuncias se revisan en **Partidas entre alumnos**.
+Los jugadores pueden ofrecer tablas (cuando cada uno lleva 10 jugadas), bloquear o denunciar desde sus partidas o la lista de jugadores. Al retar, buscar rival o crear una partida eligen si es
+**puntuada** (mueve el Elo) o **amistosa** (no lo mueve); los torneos siempre puntúan. Las denuncias se revisan en **Partidas entre alumnos**.
 Un bloqueo impide nuevos encuentros sociales; no detiene una partida ya empezada ni reemplaza la revisión del docente.
 
 ## Recuperar acceso

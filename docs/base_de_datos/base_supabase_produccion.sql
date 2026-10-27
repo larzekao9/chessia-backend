@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS usuario (
 	tutor_email VARCHAR,
 	autorizacion_tutor_en TIMESTAMP WITHOUT TIME ZONE,
 	cuenta_gestionada BOOLEAN DEFAULT 'false' NOT NULL,
+	elo INTEGER DEFAULT '1000' NOT NULL,
+	partidas_elo INTEGER DEFAULT '0' NOT NULL,
 	PRIMARY KEY (id),
 	FOREIGN KEY(institucion_id) REFERENCES institucion (id),
 	FOREIGN KEY(cuenta_vinculada_id) REFERENCES usuario (id)
@@ -239,6 +241,27 @@ CREATE TABLE IF NOT EXISTS denuncia (
 CREATE INDEX IF NOT EXISTS ix_denuncia_denunciado_id ON denuncia (denunciado_id);
 CREATE INDEX IF NOT EXISTS ix_denuncia_denunciante_id ON denuncia (denunciante_id);
 
+-- elo_movimiento: Cuánto se movió el Elo de un jugador en una partida contra otra persona (una fila por jugador y por sala). Es su historial de Elo y evita contar dos veces la misma partida.
+CREATE TABLE IF NOT EXISTS elo_movimiento (
+	id SERIAL NOT NULL,
+	usuario_id INTEGER NOT NULL,
+	rival_id INTEGER NOT NULL,
+	sala_codigo VARCHAR NOT NULL,
+	color VARCHAR NOT NULL,
+	resultado FLOAT NOT NULL,
+	elo_antes INTEGER NOT NULL,
+	elo_despues INTEGER NOT NULL,
+	elo_rival INTEGER NOT NULL,
+	creado_en TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+	PRIMARY KEY (id),
+	CONSTRAINT uq_elo_movimiento_sala UNIQUE (usuario_id, sala_codigo),
+	FOREIGN KEY(usuario_id) REFERENCES usuario (id),
+	FOREIGN KEY(rival_id) REFERENCES usuario (id)
+);
+CREATE INDEX IF NOT EXISTS ix_elo_movimiento_rival_id ON elo_movimiento (rival_id);
+CREATE INDEX IF NOT EXISTS ix_elo_movimiento_sala_codigo ON elo_movimiento (sala_codigo);
+CREATE INDEX IF NOT EXISTS ix_elo_movimiento_usuario_id ON elo_movimiento (usuario_id);
+
 -- exportacion_dataset: Una fila por cada vez que un facilitador descargó el dataset de partidas para reentrenar el modelo propio (HU4, todavía pendiente de construir).
 CREATE TABLE IF NOT EXISTS exportacion_dataset (
 	id SERIAL NOT NULL,
@@ -315,6 +338,7 @@ CREATE TABLE IF NOT EXISTS partida (
 	permite_camara BOOLEAN DEFAULT 'false' NOT NULL,
 	es_demostracion BOOLEAN DEFAULT 'false' NOT NULL,
 	usa_brazo BOOLEAN DEFAULT 'false' NOT NULL,
+	puntuada BOOLEAN DEFAULT 'true' NOT NULL,
 	estado VARCHAR DEFAULT 'en_curso' NOT NULL,
 	iniciada_en TIMESTAMP WITHOUT TIME ZONE,
 	actualizada_en TIMESTAMP WITHOUT TIME ZONE,
@@ -533,6 +557,8 @@ COMMENT ON COLUMN usuario.tutor_telefono IS 'Teléfono (WhatsApp) del tutor, par
 COMMENT ON COLUMN usuario.tutor_email IS 'Correo opcional de la madre, el padre o el tutor para compartir el progreso o contactarse. Privado, con el mismo alcance que el teléfono.';
 COMMENT ON COLUMN usuario.autorizacion_tutor_en IS 'Fecha y hora en que se declaró que el tutor autoriza el uso de ChessIA. Nulo si no se declaró.';
 COMMENT ON COLUMN usuario.cuenta_gestionada IS 'true si la cuenta la creó un docente para un alumno sin correo: el alumno entra con un usuario y una clave que el docente le entrega.';
+COMMENT ON COLUMN usuario.elo IS 'Elo del jugador entre personas: empieza en 1000 y sube o baja con cada partida contra otro jugador (reto, búsqueda de rival o torneo del curso).';
+COMMENT ON COLUMN usuario.partidas_elo IS 'Cuántas partidas contra otras personas movieron su Elo. Con menos de 20 el Elo se muestra como provisional.';
 COMMENT ON TABLE amistad IS 'Amistad entre dos jugadores que no comparten curso (los compañeros de curso no la necesitan para jugar entre sí). Una solicitud queda pendiente hasta que el destinatario la acepta; si la rechaza, la fila se borra.';
 COMMENT ON COLUMN amistad.id IS 'Identificador de la amistad.';
 COMMENT ON COLUMN amistad.solicitante_id IS 'Jugador que mandó la solicitud. FK → usuario.id.';
@@ -584,6 +610,17 @@ COMMENT ON COLUMN denuncia.estado IS 'nueva o revisada.';
 COMMENT ON COLUMN denuncia.creada_en IS 'Fecha y hora en que se hizo.';
 COMMENT ON COLUMN denuncia.resuelta_en IS 'Fecha y hora en que un docente o la plataforma la marcó como revisada.';
 COMMENT ON COLUMN denuncia.resuelta_por IS 'Usuario que la revisó. Sin clave foránea: el registro sobrevive a su cuenta.';
+COMMENT ON TABLE elo_movimiento IS 'Cuánto se movió el Elo de un jugador en una partida contra otra persona (una fila por jugador y por sala). Es su historial de Elo y evita contar dos veces la misma partida.';
+COMMENT ON COLUMN elo_movimiento.id IS 'Identificador del movimiento de Elo.';
+COMMENT ON COLUMN elo_movimiento.usuario_id IS 'Jugador cuyo Elo se movió. FK → usuario.id.';
+COMMENT ON COLUMN elo_movimiento.rival_id IS 'Su rival en esa partida. FK → usuario.id.';
+COMMENT ON COLUMN elo_movimiento.sala_codigo IS 'Código de la sala donde se jugó. Con usuario_id es único: cada partida se anota una sola vez por jugador.';
+COMMENT ON COLUMN elo_movimiento.color IS 'blancas o negras: con qué color jugó.';
+COMMENT ON COLUMN elo_movimiento.resultado IS 'Puntos que sacó: 1 ganó, 0,5 tablas, 0 perdió.';
+COMMENT ON COLUMN elo_movimiento.elo_antes IS 'Su Elo antes de la partida.';
+COMMENT ON COLUMN elo_movimiento.elo_despues IS 'Su Elo después de la partida.';
+COMMENT ON COLUMN elo_movimiento.elo_rival IS 'El Elo que tenía su rival antes de la partida.';
+COMMENT ON COLUMN elo_movimiento.creado_en IS 'Fecha y hora en que se anotó.';
 COMMENT ON TABLE exportacion_dataset IS 'Una fila por cada vez que un facilitador descargó el dataset de partidas para reentrenar el modelo propio (HU4, todavía pendiente de construir).';
 COMMENT ON COLUMN exportacion_dataset.id IS 'Identificador de la descarga.';
 COMMENT ON COLUMN exportacion_dataset.usuario_id IS 'Facilitador que descargó el dataset.';
@@ -633,6 +670,7 @@ COMMENT ON COLUMN partida.permite_simulacion_3d IS 'El facilitador habilitó la 
 COMMENT ON COLUMN partida.permite_camara IS 'El facilitador habilitó la cámara del tablero físico para esta partida.';
 COMMENT ON COLUMN partida.es_demostracion IS 'Partida que el facilitador transmite en vivo a la clase. Solo una a la vez en todo el sistema.';
 COMMENT ON COLUMN partida.usa_brazo IS 'La respuesta del oponente también se ejecuta en el brazo robótico (o su simulador).';
+COMMENT ON COLUMN partida.puntuada IS 'Solo en partidas entre personas: true si mueve el Elo de los dos jugadores, false si es amistosa (no puntúa). Los torneos siempre puntúan.';
 COMMENT ON COLUMN partida.estado IS 'esperando, en_curso, terminada o abandonada. Lo administra el ciclo de vida de la partida. esperando = sala creada, falta segundo jugador (solo humano).';
 COMMENT ON COLUMN partida.iniciada_en IS 'Momento de la primera jugada del jugador humano. Nulo si todavía no jugó ninguna.';
 COMMENT ON COLUMN partida.actualizada_en IS 'Momento de la última jugada aplicada (humano o estrategia). Nulo hasta la primera jugada.';
@@ -710,7 +748,7 @@ DECLARE
     tabla text;
     rol text;
 BEGIN
-    FOREACH tabla IN ARRAY ARRAY['auditoria', 'institucion', 'participante', 'sesion', 'pago', 'suscripcion', 'usuario', 'amistad', 'calibracion', 'codigo_invitacion', 'curso', 'denuncia', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'aviso_curso', 'inscripcion', 'jugada', 'tarea_curso', 'torneo', 'torneo_jugador', 'torneo_partida'] LOOP
+    FOREACH tabla IN ARRAY ARRAY['auditoria', 'institucion', 'participante', 'sesion', 'pago', 'suscripcion', 'usuario', 'amistad', 'calibracion', 'codigo_invitacion', 'curso', 'denuncia', 'elo_movimiento', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'aviso_curso', 'inscripcion', 'jugada', 'tarea_curso', 'torneo', 'torneo_jugador', 'torneo_partida'] LOOP
         EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', current_schema(), tabla);
     END LOOP;
     FOREACH rol IN ARRAY ARRAY['anon', 'authenticated'] LOOP
@@ -725,5 +763,5 @@ COMMIT;
 
 -- Verificación: las 7 tablas deben aparecer con rowsecurity = true.
 SELECT tablename, rowsecurity FROM pg_tables
-WHERE schemaname = current_schema() AND tablename IN ('auditoria', 'institucion', 'participante', 'sesion', 'pago', 'suscripcion', 'usuario', 'amistad', 'calibracion', 'codigo_invitacion', 'curso', 'denuncia', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'aviso_curso', 'inscripcion', 'jugada', 'tarea_curso', 'torneo', 'torneo_jugador', 'torneo_partida')
+WHERE schemaname = current_schema() AND tablename IN ('auditoria', 'institucion', 'participante', 'sesion', 'pago', 'suscripcion', 'usuario', 'amistad', 'calibracion', 'codigo_invitacion', 'curso', 'denuncia', 'elo_movimiento', 'exportacion_dataset', 'medalla_ganada', 'medalla_personalizada', 'mensaje_tutor', 'partida', 'aviso_curso', 'inscripcion', 'jugada', 'tarea_curso', 'torneo', 'torneo_jugador', 'torneo_partida')
 ORDER BY tablename;

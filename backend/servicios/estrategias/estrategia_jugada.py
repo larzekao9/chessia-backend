@@ -7,6 +7,8 @@ import os
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+import chess
+
 from backend.servicios.aprendizaje.niveles import NIVEL_MAX_MODELO
 from backend.servicios.motor.motor_ajedrez import calcular_jugada
 
@@ -61,6 +63,17 @@ class EstrategiaStockfish(EstrategiaJugada):
         return calcular_jugada(fen, nivel=self.nivel)
 
 
+JUGADAS_DE_APERTURA_VARIADA = 5
+"""Hasta esta jugada (número de jugada de la partida, la de cada bando) Turing en modo maestro elige entre las mejores candidatas de la red en vez de la primera."""
+NIVEL_PARA_VARIAR_APERTURA = 16
+"""Con qué «nivel de muestreo» elige en esas primeras jugadas: la temperatura (≈1,2) y el pool (3 candidatas) de ese nivel, con la penalidad por pieza colgada."""
+
+
+def apertura_variada_activa() -> bool:
+    """Si en modo maestro Turing varía su apertura (`AJEDREZ_TURING_APERTURA_VARIADA=0` la apaga, por ejemplo para medir su fuerza con jugadas siempre iguales)."""
+    return os.environ.get("AJEDREZ_TURING_APERTURA_VARIADA", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 class EstrategiaModelo(EstrategiaJugada):
     """El modelo propio (HU4) decide la jugada, en vez de Stockfish.
 
@@ -79,6 +92,10 @@ class EstrategiaModelo(EstrategiaJugada):
     variantes propia (`profundidad_busqueda` > 0): la red propone y pondera, el cálculo
     evita errores tácticos. Por debajo de ese nivel la búsqueda NO se usa: ahí la
     gracia es justamente que el modelo juegue de forma más humana y falible.
+
+    **Apertura variada.** El modo maestro es determinista: con la misma posición elige siempre la misma jugada, y todas las partidas empezarían igual (siempre la misma
+    siciliana, por ejemplo). Por eso, en las primeras `JUGADAS_DE_APERTURA_VARIADA` jugadas elige entre las mejores candidatas de SU red —que aprendió de partidas humanas, así
+    que sus candidatas son las aperturas que juegan las personas: siciliana, Petrov, española, francesa…— y desde ahí sigue con su juego de siempre. Sigue decidiendo el modelo.
     """
 
     def __init__(
@@ -106,6 +123,9 @@ class EstrategiaModelo(EstrategiaJugada):
         )
 
         ruta = self.ruta_checkpoint if self.ruta_checkpoint is not None else RUTA_CHECKPOINT_POR_DEFECTO
+        modo_maestro = self.nivel is None or self.nivel >= NIVEL_MAX_MODELO
+        if modo_maestro and apertura_variada_activa() and chess.Board(fen).fullmove_number <= JUGADAS_DE_APERTURA_VARIADA:
+            return predecir_jugada_maestra(fen, ruta, nivel=NIVEL_PARA_VARIAR_APERTURA)
         if self._usa_busqueda():
             from backend.servicios.aprendizaje.busqueda_turing import elegir_jugada_con_busqueda
 

@@ -11,6 +11,28 @@ ESTADOS_PARTIDA = ("esperando", "en_curso", "terminada", "abandonada")
 """Valores válidos de `Partida.estado` (ver `backend/servicios/partida/ciclo_vida.py`
 para quién los asigna). `"esperando"` = sala creada, falta el segundo jugador (solo `humano`)."""
 
+JUGADAS_SIN_PROGRESO_PARA_TABLAS = 100
+"""Medias jugadas (de ambos bandos) sin captura ni movimiento de peón con las que la partida es tablas: la regla de las 50 jugadas."""
+
+
+def fin_por_reglas(tablero: chess.Board) -> bool:
+    """`True` si las reglas del ajedrez dan la partida por terminada en `tablero`.
+
+    Además de lo que ya cierra `chess.Board.is_game_over()` (jaque mate, ahogado, material insuficiente, 75 jugadas sin
+    progreso y quíntuple repetición), acá las tablas por TRIPLE repetición de la posición y por las 50 jugadas sin captura
+    ni peón se aplican solas, sin que nadie tenga que reclamarlas (como en chess.com): así no quedan partidas eternas.
+    """
+    return tablero.is_game_over() or tablero.is_repetition(3) or tablero.halfmove_clock >= JUGADAS_SIN_PROGRESO_PARA_TABLAS
+
+
+def resultado_por_reglas(tablero: chess.Board) -> str | None:
+    """El resultado (`"1-0"`, `"0-1"` o `"1/2-1/2"`) si `fin_por_reglas(tablero)`; `None` si la partida sigue."""
+    if tablero.is_game_over():
+        return tablero.result()
+    if tablero.is_repetition(3) or tablero.halfmove_clock >= JUGADAS_SIN_PROGRESO_PARA_TABLAS:
+        return "1/2-1/2"
+    return None
+
 
 @dataclass
 class Partida:
@@ -65,6 +87,8 @@ class Partida:
     `GET /partida/{id}` sin ser su dueño ni facilitador (ver
     `ruta_partida.py::estado`), y `GET /partida/demostracion-activa` la
     devuelve sin necesidad de conocer su id de antemano."""
+    puntuada: bool = True
+    """Solo en las salas entre personas: `True` si la partida mueve el Elo de los dos jugadores; `False` si es amistosa (se juega igual, pero no puntúa)."""
     usa_brazo: bool = False
     """Si la jugada de respuesta de la estrategia activa se ejecuta también en
     el brazo (simulado o real, según `AJEDREZ_MODO_BRAZO`), además de
@@ -157,13 +181,13 @@ class Partida:
 
     @property
     def terminada(self) -> bool:
-        return self.resultado_por_tiempo is not None or self.tablero.is_game_over()
+        return self.resultado_por_tiempo is not None or fin_por_reglas(self.tablero)
 
     @property
     def resultado(self) -> str | None:
         if self.resultado_por_tiempo is not None:
             return self.resultado_por_tiempo
-        return self.tablero.result() if self.tablero.is_game_over() else None
+        return resultado_por_reglas(self.tablero)
 
     @property
     def jugadas_san(self) -> list[str]:

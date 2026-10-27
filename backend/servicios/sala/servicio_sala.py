@@ -15,13 +15,14 @@ no responde en `limpieza_salas.HORAS_SALA_INACTIVA` (2 días) también pierde la
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
 
 import chess
 
-from backend.modelos.partida import Partida
+from backend.modelos.partida import Partida, fin_por_reglas
 from backend.repositorios.repositorio_partida import RepositorioPartidas, crear_repositorio_partidas
 from backend.servicios.partida.ciclo_vida import SEGUNDOS_AUSENCIA_CON_RELOJ
 from backend.servicios.sala import presencia_sala
@@ -35,6 +36,10 @@ corren desde el principio: quien no se presenta pierde por tiempo.)"""
 
 TIPO_TORNEO = "torneo"
 """Valor de `Partida.tipo` de las salas que arma un torneo: su reloj corre desde que se crean y nadie pierde por ausencia hasta que se presenta."""
+
+JUGADAS_MINIMAS_PARA_OFRECER_TABLAS = 20
+"""Medias jugadas que tiene que llevar la partida para poder ofrecer tablas (10 de cada uno). Antes de eso todavía hay mucho por jugar, y dejarlo
+libre permitiría pactar tablas al instante entre amigos para mover puntos sin jugar. Aceptar una oferta no pide nada: la oferta no existe antes."""
 
 JUGADAS_ENTRE_OFERTAS_DE_TABLAS = 4
 """Después de ofrecer tablas, hay que esperar esta cantidad de jugadas (de cualquiera) para volver a ofrecerlas: así no se usa para molestar."""
@@ -58,7 +63,23 @@ def _a_datetime_utc(valor: str) -> datetime:
         momento = momento.replace(tzinfo=timezone.utc)
     return momento.astimezone(timezone.utc)
 
+logger = logging.getLogger(__name__)
+
 _repositorio: RepositorioPartidas = crear_repositorio_partidas()
+
+
+def _registrar_elo(partida: Partida) -> None:
+    """Anota el resultado de la sala en el Elo de los dos jugadores (ver `social.elo`). Nunca tumba el cierre de la sala: si algo falla, se registra y la partida sigue cerrada."""
+    fabrica = getattr(_repositorio, "_fabrica_sesiones", None)
+    if fabrica is None:  # el repositorio en memoria (pruebas) no tiene usuarios
+        return
+    try:
+        from backend.servicios.social import elo
+
+        with fabrica() as db:
+            elo.registrar_partida(db, partida)
+    except Exception:  # noqa: BLE001 - el Elo es un extra: no puede romper el final de una partida
+        logger.exception("No se pudo anotar el Elo de la sala %s", partida.codigo_sala)
 
 # Alfabeto sin ambiguos para códigos de sala (sin 0, O, 1, I, L)
 _ALFABETO_CODIGO = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
@@ -105,7 +126,7 @@ def _calcular_version(partida: Partida) -> int:
     return len(partida.tablero.move_stack) * 10 + estado_idx
 
 
-def crear_sala(usuario_id: int, color: str, control_tiempo_ms: int = 0, tipo: str = "digital") -> Partida:
+def crear_sala(usuario_id: int, color: str, control_tiempo_ms: int = 0, tipo: str = "digital", puntuada: bool = True) -> Partida:
     """Crea una sala `esperando` con código único.
 
     Args:
@@ -113,6 +134,7 @@ def crear_sala(usuario_id: int, color: str, control_tiempo_ms: int = 0, tipo: st
         color: "blancas", "negras" o "aleatorio".
         control_tiempo_ms: milisegundos por lado para toda la partida (uno de `CONTROLES_DE_TIEMPO_MS`); `0` = sin reloj.
         tipo: `"digital"` (una sala común) o `TIPO_TORNEO` (una partida de un torneo).
+        puntuada: `True` si la partida mueve el Elo; `False` si es amistosa.
 
     Cancela (elimina) las salas `esperando` anteriores del mismo creador: solo
     puede tener una sala abierta esperando rival.
@@ -151,6 +173,7 @@ def crear_sala(usuario_id: int, color: str, control_tiempo_ms: int = 0, tipo: st
         nivel=0,
         tipo_oponente="humano",
         tipo=tipo,
+        puntuada=puntuada,
         estado="esperando",
         fen_inicial=chess.STARTING_FEN,
         usuario_id=usuario_id,
@@ -203,6 +226,13 @@ def _cerrar(partida: Partida, ganador: str | None, estado: str, ahora: datetime)
     for color in ("blancas", "negras"):
         _ultima_oferta.pop((partida.id, color), None)
     _repositorio.guardar(partida)
+    _registrar_elo(partida)
+
+
+def _ganador_al_caer_la_bandera(partida: Partida, ganador: str) -> str:
+    """Quien se queda sin tiempo pierde (`ganador` es el rival), salvo que el rival no tenga material para dar mate: son tablas (regla de la FIDE)."""
+    color = chess.WHITE if ganador == "blancas" else chess.BLACK
+    return "tablas" if partida.tablero.has_insufficient_material(color) else ganador
 
 
 def _aplicar_tiempo_agotado(partida: Partida, ahora: datetime) -> bool:
@@ -212,11 +242,11 @@ def _aplicar_tiempo_agotado(partida: Partida, ahora: datetime) -> bool:
     blancas, negras = restantes_ms(partida, ahora)
     if partida.tablero.turn == chess.WHITE and blancas <= 0:
         partida.tiempo_blancas_ms, partida.tiempo_negras_ms = 0, negras
-        _cerrar(partida, "negras", "terminada", ahora)
+        _cerrar(partida, _ganador_al_caer_la_bandera(partida, "negras"), "terminada", ahora)
         return True
     if partida.tablero.turn == chess.BLACK and negras <= 0:
         partida.tiempo_blancas_ms, partida.tiempo_negras_ms = blancas, 0
-        _cerrar(partida, "blancas", "terminada", ahora)
+        _cerrar(partida, _ganador_al_caer_la_bandera(partida, "blancas"), "terminada", ahora)
         return True
     return False
 
@@ -428,7 +458,7 @@ def mover_humano(codigo: str, usuario_id: int, jugada_uci: str) -> Partida:
         partida.actualizada_en = ahora_iso
 
         # Detectar fin
-        if partida.tablero.is_game_over():
+        if fin_por_reglas(partida.tablero):
             partida.estado = "terminada"
             presencia_sala.olvidar_sala(partida.id)
             # resultado y motivo_fin se leen de tablero.result() y tablero.outcome()
@@ -442,6 +472,8 @@ def mover_humano(codigo: str, usuario_id: int, jugada_uci: str) -> Partida:
             jugada.uci(),
             "jugador",
         )
+        if partida.terminada:
+            _registrar_elo(partida)
 
     return partida
 
@@ -471,7 +503,8 @@ def ofrecer_o_aceptar_tablas(codigo: str, usuario_id: int) -> Partida:
     Raises:
         KeyError: si el código no existe.
         PermissionError: si es espectador.
-        ValueError: si la partida no está en curso, si ya ofreció y espera la respuesta, o si ofreció hace poco (hay que esperar `JUGADAS_ENTRE_OFERTAS_DE_TABLAS` jugadas).
+        ValueError: si la partida no está en curso, si ya ofreció y espera la respuesta, si todavía es muy pronto (`JUGADAS_MINIMAS_PARA_OFRECER_TABLAS`) o si ofreció hace poco (hay que
+            esperar `JUGADAS_ENTRE_OFERTAS_DE_TABLAS` jugadas).
     """
     partida = _sentado_en_curso(codigo, usuario_id)
     with _lock_para(partida.id):
@@ -484,6 +517,8 @@ def ofrecer_o_aceptar_tablas(codigo: str, usuario_id: int) -> Partida:
             return partida
         if vigente == color:
             raise ValueError("Ya ofreciste tablas: esperá la respuesta de tu rival.")
+        if jugadas < JUGADAS_MINIMAS_PARA_OFRECER_TABLAS:
+            raise ValueError(f"Es muy pronto para ofrecer tablas: se pueden ofrecer cuando cada uno hizo {JUGADAS_MINIMAS_PARA_OFRECER_TABLAS // 2} jugadas.")
         ultima = _ultima_oferta.get((partida.id, color))
         if ultima is not None and jugadas - ultima < JUGADAS_ENTRE_OFERTAS_DE_TABLAS:
             raise ValueError("Esperá unas jugadas antes de volver a ofrecer tablas.")

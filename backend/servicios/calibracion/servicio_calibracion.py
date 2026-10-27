@@ -26,6 +26,7 @@ from backend.database import fecha_a_iso
 from backend.modelos.tablas_orm import CalibracionORM, UsuarioORM
 from backend.servicios.aprendizaje.niveles import NIVEL_MAX_MODELO
 from backend.servicios.auth import actualizar_nivel_estimado
+from backend.servicios.calibracion.desafio import calcular_desafio
 from backend.servicios.motor.motor_ajedrez import NIVEL_MAX, NIVEL_MIN
 from backend.servicios.retroalimentacion import calcular_rango_desde_precision
 from backend.servicios.retroalimentacion.servicio_retroalimentacion import BANDA_NIVEL_POR_RANGO
@@ -367,4 +368,5 @@ def estado_nivel_jugador(db: Session, usuario: UsuarioORM) -> dict[str, Any]:
             for fila in reversed(historial)
         ],
         "escala": escala_niveles(),
+        "desafio_turing": calcular_desafio(db, usuario.id),
     }

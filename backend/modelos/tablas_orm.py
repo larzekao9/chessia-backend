@@ -102,6 +102,9 @@ class UsuarioORM(Base):
     autorizacion_tutor_en: Mapped[datetime | None] = mapped_column(nullable=True)
     # `True` en las cuentas que creó un docente para un alumno sin correo (entra con un usuario y una clave que el docente le entrega).
     cuenta_gestionada: Mapped[bool] = mapped_column(default=False, server_default="false", nullable=False)
+    # Elo entre jugadores (ver `servicios/social/elo.py`): empieza en 1000 y se mueve con las partidas contra otras personas.
+    elo: Mapped[int] = mapped_column(default=1000, server_default="1000", nullable=False)
+    partidas_elo: Mapped[int] = mapped_column(default=0, server_default="0", nullable=False)
 
     partidas: Mapped[list["PartidaORM"]] = relationship(
         back_populates="usuario",
@@ -155,6 +158,8 @@ class PartidaORM(Base):
     # Si la jugada de respuesta de la estrategia activa también se ejecuta en el
     # brazo (ver `modelos/partida.py`, `Partida.usa_brazo`, HU9).
     usa_brazo: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+    # Si una partida entre personas mueve el Elo (puntuada) o es amistosa (ver `servicios/social/elo.py`); solo importa en las de `tipo_oponente = 'humano'`.
+    puntuada: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
     # Ciclo de vida de la partida (ver `modelos/partida.py`, `Partida.estado` y
     # `ESTADOS_PARTIDA`): 'en_curso' | 'terminada' | 'abandonada'.
     estado: Mapped[str] = mapped_column(nullable=False, default="en_curso", server_default="en_curso")
@@ -487,6 +492,25 @@ class AmistadORM(Base):
     estado: Mapped[str] = mapped_column(nullable=False, default="pendiente", server_default="pendiente")
     creada_en: Mapped[datetime] = mapped_column(server_default=func.now())
     respondida_en: Mapped[datetime | None] = mapped_column(nullable=True)
+
+
+class EloMovimientoORM(Base):
+    """Cuánto se movió el Elo de un jugador en una partida contra otra persona: una fila por jugador y por sala (la sala se anota una sola vez, aunque la consulten los dos a la
+    vez). Sirve para mostrarle cómo viene (su historial) y para que el Elo no se cuente dos veces. Tabla nueva: `create_all` la crea sola."""
+
+    __tablename__ = "elo_movimiento"
+    __table_args__ = (UniqueConstraint("usuario_id", "sala_codigo", name="uq_elo_movimiento_sala"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    usuario_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    rival_id: Mapped[int] = mapped_column(ForeignKey("usuario.id"), nullable=False, index=True)
+    sala_codigo: Mapped[str] = mapped_column(nullable=False, index=True)
+    color: Mapped[str] = mapped_column(nullable=False)  # 'blancas' | 'negras'
+    resultado: Mapped[float] = mapped_column(nullable=False)  # 1 ganó, 0.5 tablas, 0 perdió (para este jugador)
+    elo_antes: Mapped[int] = mapped_column(nullable=False)
+    elo_despues: Mapped[int] = mapped_column(nullable=False)
+    elo_rival: Mapped[int] = mapped_column(nullable=False)
+    creado_en: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class DenunciaORM(Base):

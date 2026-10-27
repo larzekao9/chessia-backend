@@ -40,6 +40,7 @@ class Reto:
     control_tiempo_ms: int
     color_retador: str
     creado: float
+    puntuada: bool = True
     estado: str = "pendiente"  # pendiente | aceptado | rechazado | cancelado | expirado
     avisado_al_retador: bool = False
     """`True` cuando quien retó ya se enteró de cómo terminó el reto (aceptado, rechazado o vencido)."""
@@ -89,7 +90,9 @@ def _purgar(ahora: float | None = None) -> None:
         del _retos[reto_id]
 
 
-def crear(db: Session, retador: UsuarioORM, retado_id: int, color: str = "aleatorio", control_tiempo_ms: int = 0, *, revancha: bool = False) -> Reto:
+def crear(
+    db: Session, retador: UsuarioORM, retado_id: int, color: str = "aleatorio", control_tiempo_ms: int = 0, *, revancha: bool = False, puntuada: bool = True
+) -> Reto:
     """Reta a `retado_id`: crea la sala con el reloj y el color elegidos y deja el reto pendiente.
 
     Raises:
@@ -116,7 +119,7 @@ def crear(db: Session, retador: UsuarioORM, retado_id: int, color: str = "aleato
                 previo.estado, previo.avisado_al_retador = "cancelado", True
                 _cancelar_sala(previo)
         try:
-            sala = servicio_sala.crear_sala(retador.id, color, control_tiempo_ms)
+            sala = servicio_sala.crear_sala(retador.id, color, control_tiempo_ms, puntuada=puntuada)
         except ValueError as error:
             raise ErrorSocial(str(error)) from error
         reto = Reto(
@@ -127,6 +130,7 @@ def crear(db: Session, retador: UsuarioORM, retado_id: int, color: str = "aleato
             control_tiempo_ms=control_tiempo_ms,
             color_retador="blancas" if sala.usuario_blancas_id == retador.id else "negras",
             creado=_instante(),
+            puntuada=puntuada,
         )
         _retos[reto.id] = reto
         _purgar()
@@ -155,6 +159,7 @@ def recibidos(db: Session, usuario_id: int) -> list[dict]:
                 "id": reto.id,
                 "de": persona(retador),
                 "control_tiempo_ms": reto.control_tiempo_ms,
+                "puntuada": reto.puntuada,
                 "tu_color": "negras" if reto.color_retador == "blancas" else "blancas",
                 "segundos_restantes": max(0, int(SEGUNDOS_DE_VIGENCIA - (_instante() - reto.creado))),
             }
@@ -250,7 +255,7 @@ def revancha(db: Session, usuario: UsuarioORM, codigo: str) -> Reto:
         raise ErrorSocial("Pasó mucho tiempo desde esa partida: retalo de nuevo desde tu lista.", 409)
     rival_id = partida.usuario_negras_id if usuario.id == partida.usuario_blancas_id else partida.usuario_blancas_id
     color = "negras" if usuario.id == partida.usuario_blancas_id else "blancas"
-    return crear(db, usuario, rival_id, color, partida.control_tiempo_ms, revancha=True)
+    return crear(db, usuario, rival_id, color, partida.control_tiempo_ms, revancha=True, puntuada=partida.puntuada)
 
 
 def cancelar_de_usuario(usuario_id: int) -> None:

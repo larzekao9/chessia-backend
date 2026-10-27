@@ -27,7 +27,8 @@
       "Bash(cd \"D:/UNIVERSIDAD/Software_II/Proyecto_Grupal_Ajedrez/Brazo-Rob-tico-con-Inteligencia-Artificial-para-el-Aprendizaje-del-Ajedrez\" && sed -i 's/^from backend.servicios.institucion.servicio_instituciones import administra_alguna$/from backend.servicios.institucion.servicio_instituciones import administra_alguna, ids_alumnos_visibles/' backend/rutas/ruta_auth.py && wc -l backend/rutas/ruta_auth.py && git diff HEAD -- backend/rutas/ruta_auth.py | tail -n 60)",
       "Bash(python -)",
       "Read(//c/Users/USUARIO/AppData/Local/Temp/vh/**)",
-      "Bash(cd \"D:/UNIVERSIDAD/Software_II/Proyecto_Grupal_Ajedrez/Brazo-Rob-tico-con-Inteligencia-Artificial-para-el-Aprendizaje-del-Ajedrez\" && sed -i 's/_nombre_de_perfil_seguro/nombre_de_perfil_seguro/g' backend/servicios/vision/tablero.py && grep -n \"nombre_de_perfil_seguro\" backend/servicios/vision/tablero.py)"
+      "Bash(cd \"D:/UNIVERSIDAD/Software_II/Proyecto_Grupal_Ajedrez/Brazo-Rob-tico-con-Inteligencia-Artificial-para-el-Aprendizaje-del-Ajedrez\" && sed -i 's/_nombre_de_perfil_seguro/nombre_de_perfil_seguro/g' backend/servicios/vision/tablero.py && grep -n \"nombre_de_perfil_seguro\" backend/servicios/vision/tablero.py)",
+      "Read(//c/tmp/poster/**)"
     ],
     "deny": [
       "Bash(rm -rf:*)",

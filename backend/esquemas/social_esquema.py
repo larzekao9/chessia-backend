@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class PersonaResponse(BaseModel):
@@ -14,6 +14,9 @@ class PersonaResponse(BaseModel):
     avatar_url: Optional[str] = None
     nivel: Optional[int] = None
     rango: Optional[str] = None
+    elo: Optional[int] = None
+    elo_provisional: bool = False
+    """`True` mientras lleva pocas partidas entre personas: el Elo todavía no dice mucho (se muestra como «1000?»)."""
     en_linea: bool = False
     relacion: Optional[str] = None  # "compañero" | "amigo" | "ambos" | None
 
@@ -54,6 +57,8 @@ class CrearRetoRequest(BaseModel):
     color: Literal["blancas", "negras", "aleatorio"] = "aleatorio"
     control_tiempo_ms: int = Field(default=0, ge=0, le=3_600_000)
     """Milisegundos por lado: `0` (sin reloj), `180000`, `300000`, `600000` o `900000`."""
+    puntuada: bool = True
+    """`True` si la partida mueve el Elo de los dos; `False` para una partida amistosa que no puntúa."""
 
 
 class RetoCreadoResponse(BaseModel):
@@ -68,6 +73,7 @@ class RetoRecibidoResponse(BaseModel):
     id: str
     de: PersonaResponse
     control_tiempo_ms: int
+    puntuada: bool = True
     tu_color: str
     segundos_restantes: int
 
@@ -88,6 +94,21 @@ class AceptarRetoResponse(BaseModel):
 
 class BuscarRivalRequest(BaseModel):
     control_tiempo_ms: int = Field(default=0, ge=0, le=3_600_000)
+    puntuada: bool = True
+    """`False` para buscar una partida amistosa (que no mueve el Elo): solo se empareja con quien también la busca amistosa."""
+    elo_min: Optional[int] = Field(default=None, ge=0, le=3000)
+    elo_max: Optional[int] = Field(default=None, ge=0, le=3000)
+    nivel_min: Optional[int] = Field(default=None, ge=0, le=20)
+    nivel_max: Optional[int] = Field(default=None, ge=0, le=20)
+    """Filtros opcionales de la búsqueda: el rival tiene que tener un Elo (y/o un nivel) dentro de esos límites. Sin filtros se busca a alguien de nivel parecido, como siempre. El otro
+    jugador también tiene que aceptarte: si él filtró por Elo o nivel, vos tenés que estar dentro de lo que pidió."""
+
+    @model_validator(mode="after")
+    def _rangos_en_orden(self) -> "BuscarRivalRequest":
+        for minimo, maximo, nombre in ((self.elo_min, self.elo_max, "Elo"), (self.nivel_min, self.nivel_max, "nivel")):
+            if minimo is not None and maximo is not None and minimo > maximo:
+                raise ValueError(f"El {nombre} mínimo no puede ser mayor que el máximo")
+        return self
 
 
 class BusquedaResponse(BaseModel):
@@ -98,6 +119,8 @@ class BusquedaResponse(BaseModel):
     rival: Optional[PersonaResponse] = None
     segundos: int = 0
     tolerancia: Optional[int] = None
+    filtros: Optional[dict] = None
+    """Los filtros de la búsqueda (`elo_min`, `elo_max`, `nivel_min`, `nivel_max`) cuando se pidieron; entonces no hay `tolerancia` de nivel."""
 
 
 class JugadorEnVivoResponse(BaseModel):
@@ -105,6 +128,7 @@ class JugadorEnVivoResponse(BaseModel):
     nombre: str  # el docente ve el nombre completo de sus alumnos
     nivel: Optional[int] = None
     rango: Optional[str] = None
+    elo: Optional[int] = None
 
 
 class PartidaEnVivoResponse(BaseModel):
@@ -150,6 +174,27 @@ class DenunciaResponse(BaseModel):
     denunciante: Optional[str] = None
     denunciado: Optional[str] = None
     denunciado_id: int
+
+
+class MovimientoEloResponse(BaseModel):
+    """Una partida que movió el Elo del jugador."""
+
+    fecha: str
+    rival: str
+    rival_elo: int
+    resultado: str  # "ganó" | "empató" | "perdió"
+    antes: int
+    despues: int
+    cambio: int
+
+
+class MiEloResponse(BaseModel):
+    """El Elo del jugador y cómo viene: sus últimas partidas contra otras personas."""
+
+    elo: int
+    partidas: int
+    provisional: bool
+    historial: list[MovimientoEloResponse]
 
 
 class AvisosResponse(BaseModel):

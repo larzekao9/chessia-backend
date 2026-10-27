@@ -8,7 +8,7 @@ from typing import Iterator
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy import select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, object_session, sessionmaker
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from backend.database import DATABASE_URL, crear_fabrica_sesiones, crear_tablas, fecha_a_iso, obtener_engine
@@ -60,6 +60,7 @@ from backend.servicios.auth import (
 )
 from backend.servicios.calibracion import (
     PARTIDAS_DIAGNOSTICO,
+    calcular_desafio,
     contar_calibraciones,
     contar_calibraciones_por_usuario,
     estado_nivel_jugador,
@@ -126,8 +127,11 @@ def _institucion_de(user):
         return None
 
 
-def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
+def _a_respuesta(user, partidas_calibradas: int, con_desafio: bool = True) -> UsuarioResponse:
     institucion = _institucion_de(user)
+    # El desafío de Turing es una consulta por jugador: se omite en los listados (`con_desafio=False`).
+    sesion = object_session(user)
+    desafio_turing = calcular_desafio(sesion, user.id) if con_desafio and sesion is not None and user.rol == "jugador" else 0
     return UsuarioResponse(
         id=user.id,
         email=user.email,
@@ -138,6 +142,8 @@ def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
         avatar_url=user.avatar_url,
         nivel_estimado=user.nivel_estimado,
         rango_estimado=user.rango_estimado,
+        elo=user.elo,
+        partidas_elo=user.partidas_elo,
         edad=user.edad,
         es_menor=None if user.edad is None else user.edad < autorizacion.MAYORIA_DE_EDAD,
         tutor_nombre=user.tutor_nombre,
@@ -148,6 +154,7 @@ def _a_respuesta(user, partidas_calibradas: int) -> UsuarioResponse:
         diagnostico_completado=partidas_calibradas >= PARTIDAS_DIAGNOSTICO,
         partidas_calibradas=partidas_calibradas,
         partidas_diagnostico=PARTIDAS_DIAGNOSTICO,
+        desafio_turing=desafio_turing,
         activo=user.activo,
         doble_factor_activo=bool(user.totp_activo),
         doble_factor_obligatorio=bool(
@@ -655,7 +662,7 @@ def listar_usuarios(
         consulta = consulta.where(UsuarioORM.id.in_(visibles))
     usuarios = db.scalars(consulta).all()
     calibradas = contar_calibraciones_por_usuario(db, [u.id for u in usuarios])
-    return [_a_respuesta(u, calibradas.get(u.id, 0)) for u in usuarios]
+    return [_a_respuesta(u, calibradas.get(u.id, 0), con_desafio=False) for u in usuarios]
 
 
 @router.post(

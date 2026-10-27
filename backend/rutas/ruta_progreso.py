@@ -74,7 +74,7 @@ def _curso_visible(db: Session, curso_id: int, facilitador_id: int) -> CursoORM:
 def progreso_del_curso(curso_id: int, facilitador_id: int = Depends(get_current_facilitador), db: Session = Depends(get_db)) -> ProgresoGrupoResponse:
     """Cuántos alumnos del curso mejoraron desde su diagnóstico y cuánto, con una fila por alumno."""
     curso = _curso_visible(db, curso_id, facilitador_id)
-    return ProgresoGrupoResponse(nombre=curso.nombre, **_a_iso(progreso.progreso_de_grupo(db, progreso.ids_del_curso(db, curso.id))))
+    return ProgresoGrupoResponse(nombre=curso.nombre, **_a_iso(progreso.progreso_de_grupo(db, progreso.ids_del_curso(db, curso.id), con_plan=True)))
 
 
 @router.get("/institucion", response_model=ProgresoGrupoResponse, summary="Antes y después de mi institución")

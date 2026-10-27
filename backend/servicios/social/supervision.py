@@ -21,7 +21,7 @@ def _jugador(db: Session, usuario_id: int | None) -> dict | None:
     usuario = db.get(UsuarioORM, usuario_id) if usuario_id is not None else None
     if usuario is None:
         return None
-    return {"id": usuario.id, "nombre": usuario.nombre, "nivel": usuario.nivel_estimado, "rango": usuario.rango_estimado}
+    return {"id": usuario.id, "nombre": usuario.nombre, "nivel": usuario.nivel_estimado, "rango": usuario.rango_estimado, "elo": usuario.elo}
 
 
 def partidas_en_vivo(db: Session, facilitador: UsuarioORM) -> list[dict]:

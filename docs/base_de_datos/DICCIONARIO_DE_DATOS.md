@@ -3,7 +3,7 @@
 Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_de_datos/generar_esquema.py`. No editar a mano.
 
 - Motor: PostgreSQL 16. La aplicación crea las tablas sola al arrancar; el script equivalente está en [base_completa.sql](base_completa.sql); para producción en Supabase, [base_supabase_produccion.sql](base_supabase_produccion.sql).
-- Tablas: 24 (22 en uso, 2 reservadas para sesiones de clase).
+- Tablas: 25 (23 en uso, 2 reservadas para sesiones de clase).
 - Sin `DATABASE_URL` configurada, la aplicación guarda las partidas en memoria y no usa estas tablas para ellas.
 
 ## Relaciones
@@ -28,6 +28,7 @@ Generado automáticamente desde `backend/modelos/tablas_orm.py` con `docs/base_d
 | `curso` | `aviso_curso` | 1 a N | Un curso recibe varios avisos de su docente. |
 | `curso` | `tarea_curso` | 1 a N | Un curso recibe varias tareas de su docente. |
 | `usuario` | `denuncia` | 1 a N | Un jugador puede denunciar a otros o ser denunciado, varias veces. |
+| `usuario` | `elo_movimiento` | 1 a N | Un jugador tiene un movimiento de Elo por cada partida contra otra persona que contó; cada uno apunta también al rival. |
 | `usuario` | `amistad` | 1 a N | Un jugador manda y recibe muchas solicitudes de amistad; cada amistad une a dos jugadores distintos. |
 | `usuario` | `curso` | 1 a N | Un facilitador crea varios cursos; cada curso tiene un solo facilitador. |
 | `curso` | `inscripcion` | 1 a N | Un curso tiene muchos jugadores inscritos. |
@@ -175,6 +176,8 @@ Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
 | `tutor_email` | VARCHAR | sí |  |  | Correo opcional de la madre, el padre o el tutor para compartir el progreso o contactarse. Privado, con el mismo alcance que el teléfono. |
 | `autorizacion_tutor_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que se declaró que el tutor autoriza el uso de ChessIA. Nulo si no se declaró. |
 | `cuenta_gestionada` | BOOLEAN | no |  | false | `true` si la cuenta la creó un docente para un alumno sin correo: el alumno entra con un usuario y una clave que el docente le entrega. |
+| `elo` | INTEGER | no |  | 1000 | Elo del jugador entre personas: empieza en 1000 y sube o baja con cada partida contra otro jugador (reto, búsqueda de rival o torneo del curso). |
+| `partidas_elo` | INTEGER | no |  | 0 | Cuántas partidas contra otras personas movieron su Elo. Con menos de 20 el Elo se muestra como provisional. |
 
 ## `amistad`
 
@@ -271,6 +274,27 @@ Denuncia de un jugador contra otro (conducta, trampa o abandonos). La revisa el 
 | `resuelta_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Fecha y hora en que un docente o la plataforma la marcó como revisada. |
 | `resuelta_por` | INTEGER | sí |  |  | Usuario que la revisó. Sin clave foránea: el registro sobrevive a su cuenta. |
 
+## `elo_movimiento`
+
+Cuánto se movió el Elo de un jugador en una partida contra otra persona (una fila por jugador y por sala). Es su historial de Elo y evita contar dos veces la misma partida.
+
+**Estado:** En uso
+
+| Columna | Tipo | Nulo | Clave | Por defecto | Descripción |
+| :-- | :-- | :-: | :-- | :-- | :-- |
+| `id` | INTEGER | no | PK |  | Identificador del movimiento de Elo. |
+| `usuario_id` | INTEGER | no | FK → usuario.id |  | Jugador cuyo Elo se movió. FK → usuario.id. |
+| `rival_id` | INTEGER | no | FK → usuario.id |  | Su rival en esa partida. FK → usuario.id. |
+| `sala_codigo` | VARCHAR | no |  |  | Código de la sala donde se jugó. Con `usuario_id` es único: cada partida se anota una sola vez por jugador. |
+| `color` | VARCHAR | no |  |  | `blancas` o `negras`: con qué color jugó. |
+| `resultado` | FLOAT | no |  |  | Puntos que sacó: 1 ganó, 0,5 tablas, 0 perdió. |
+| `elo_antes` | INTEGER | no |  |  | Su Elo antes de la partida. |
+| `elo_despues` | INTEGER | no |  |  | Su Elo después de la partida. |
+| `elo_rival` | INTEGER | no |  |  | El Elo que tenía su rival antes de la partida. |
+| `creado_en` | TIMESTAMP WITHOUT TIME ZONE | no |  | now() | Fecha y hora en que se anotó. |
+
+**Restricciones:** `uq_elo_movimiento_sala` único (usuario_id, sala_codigo).
+
 ## `exportacion_dataset`
 
 Una fila por cada vez que un facilitador descargó el dataset de partidas para reentrenar el modelo propio (HU4, todavía pendiente de construir).
@@ -361,6 +385,7 @@ Cada partida jugada: quién la jugó, contra qué oponente, a qué nivel, la pos
 | `permite_camara` | BOOLEAN | no |  | false | El facilitador habilitó la cámara del tablero físico para esta partida. |
 | `es_demostracion` | BOOLEAN | no |  | false | Partida que el facilitador transmite en vivo a la clase. Solo una a la vez en todo el sistema. |
 | `usa_brazo` | BOOLEAN | no |  | false | La respuesta del oponente también se ejecuta en el brazo robótico (o su simulador). |
+| `puntuada` | BOOLEAN | no |  | true | Solo en partidas entre personas: `true` si mueve el Elo de los dos jugadores, `false` si es amistosa (no puntúa). Los torneos siempre puntúan. |
 | `estado` | VARCHAR | no |  | en_curso | `esperando`, `en_curso`, `terminada` o `abandonada`. Lo administra el ciclo de vida de la partida. `esperando` = sala creada, falta segundo jugador (solo `humano`). |
 | `iniciada_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Momento de la primera jugada del jugador humano. Nulo si todavía no jugó ninguna. |
 | `actualizada_en` | TIMESTAMP WITHOUT TIME ZONE | sí |  |  | Momento de la última jugada aplicada (humano o estrategia). Nulo hasta la primera jugada. |
@@ -512,6 +537,7 @@ erDiagram
     curso ||--o{ aviso_curso : tiene
     curso ||--o{ tarea_curso : tiene
     usuario ||--o{ denuncia : tiene
+    usuario ||--o{ elo_movimiento : tiene
     usuario ||--o{ amistad : tiene
     usuario ||--o{ curso : tiene
     curso ||--o{ inscripcion : tiene
@@ -609,6 +635,8 @@ erDiagram
         VARCHAR tutor_email
         TIMESTAMP autorizacion_tutor_en
         BOOLEAN cuenta_gestionada
+        INTEGER elo
+        INTEGER partidas_elo
     }
     amistad {
         INTEGER id PK
@@ -666,6 +694,18 @@ erDiagram
         TIMESTAMP resuelta_en
         INTEGER resuelta_por
     }
+    elo_movimiento {
+        INTEGER id PK
+        INTEGER usuario_id FK
+        INTEGER rival_id FK
+        VARCHAR sala_codigo
+        VARCHAR color
+        FLOAT resultado
+        INTEGER elo_antes
+        INTEGER elo_despues
+        INTEGER elo_rival
+        TIMESTAMP creado_en
+    }
     exportacion_dataset {
         INTEGER id PK
         INTEGER usuario_id FK
@@ -719,6 +759,7 @@ erDiagram
         BOOLEAN permite_camara
         BOOLEAN es_demostracion
         BOOLEAN usa_brazo
+        BOOLEAN puntuada
         VARCHAR estado
         TIMESTAMP iniciada_en
         TIMESTAMP actualizada_en
@@ -892,6 +933,8 @@ classDiagram
         -VARCHAR tutor_email
         -TIMESTAMP autorizacion_tutor_en
         -BOOLEAN cuenta_gestionada
+        -INTEGER elo
+        -INTEGER partidas_elo
     }
     class Amistad {
         -INTEGER id
@@ -949,6 +992,18 @@ classDiagram
         -TIMESTAMP resuelta_en
         -INTEGER resuelta_por
     }
+    class EloMovimiento {
+        -INTEGER id
+        -INTEGER usuario_id
+        -INTEGER rival_id
+        -VARCHAR sala_codigo
+        -VARCHAR color
+        -FLOAT resultado
+        -INTEGER elo_antes
+        -INTEGER elo_despues
+        -INTEGER elo_rival
+        -TIMESTAMP creado_en
+    }
     class ExportacionDataset {
         -INTEGER id
         -INTEGER usuario_id
@@ -1002,6 +1057,7 @@ classDiagram
         -BOOLEAN permite_camara
         -BOOLEAN es_demostracion
         -BOOLEAN usa_brazo
+        -BOOLEAN puntuada
         -VARCHAR estado
         -TIMESTAMP iniciada_en
         -TIMESTAMP actualizada_en
@@ -1098,6 +1154,7 @@ classDiagram
     Curso "1" --> "0..*" AvisoCurso
     Curso "1" --> "0..*" TareaCurso
     Usuario "1" --> "0..*" Denuncia
+    Usuario "1" --> "0..*" EloMovimiento
     Usuario "1" --> "0..*" Amistad
     Usuario "1" --> "0..*" Curso
     Curso "1" --> "0..*" Inscripcion
