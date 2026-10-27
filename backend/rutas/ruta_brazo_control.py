@@ -71,9 +71,24 @@ class ProbarAperturaRequest(BaseModel):
     tipo_pieza: str = Field("p", max_length=1)
 
 
+class LlevarAlCementerioRequest(BaseModel):
+    zona: str = Field(pattern="^(brazo|jugador)$")
+    """El cementerio donde se enseña: `brazo` (blancas) o `jugador` (negras)."""
+    tipo_pieza: str = Field("p", max_length=1)
+    numero: int = Field(1, ge=1, le=8)
+    """Cuál de esas piezas es: peón 1 a 8, o 1 y 2 para las demás."""
+    origen: str = Field("h2", max_length=2)
+    """La casilla del tablero donde está la pieza que el brazo toma."""
+
+
+class SoltarEnElCementerioRequest(BaseModel):
+    guardar: bool = True
+    guardar_altura: bool = False
+
+
 class ProbarLugarRequest(BaseModel):
     lugar: str = Field(max_length=30)
-    """`cementerio:K` (K de 0 a 29), `reserva:dama_negra` o `reserva:dama_blanca`."""
+    """`cementerio:K` o `cementerio_jugador:K` (K de 0 a 71), `reserva:dama_negra` o `reserva:dama_blanca`."""
 
 
 class MoverPiezaRequest(BaseModel):
@@ -85,7 +100,7 @@ class MoverPiezaRequest(BaseModel):
     tipo_capturada: str = Field("p", max_length=1)
     al_cementerio: bool = False
     """Manda la pieza del origen al cementerio (sin destino)."""
-    casilla_cementerio: int = Field(0, ge=0, le=29)
+    casilla_cementerio: int = Field(0, ge=0, le=71)
 
 
 @router.get("/estado")
@@ -211,6 +226,18 @@ def centrar_bajar(cuerpo: ProbarAperturaRequest) -> dict:
 def centrar_guardar() -> dict:
     """Guarda cuánto se corrió la pinza respecto de la casilla calibrada; desde ahí todo el tablero lleva ese corrimiento."""
     return _llamar(control_brazo.centrar_guardar)
+
+
+@router.post("/cementerio/llevar")
+def cementerio_llevar(cuerpo: LlevarAlCementerioRequest) -> dict:
+    """Toma la pieza de `origen`, la lleva al lugar que le toca en el cementerio de `zona` y la deja suspendida ahí, sin soltarla, para corregirla con «mover-relativo»."""
+    return _llamar(control_brazo.cementerio_llevar, cuerpo.zona, cuerpo.tipo_pieza, cuerpo.numero, cuerpo.origen)
+
+
+@router.post("/cementerio/soltar")
+def cementerio_soltar(cuerpo: SoltarEnElCementerioRequest) -> dict:
+    """Suelta la pieza donde está y vuelve al descanso; con `guardar` guarda esa posición como origen, paso o paso de fila, y con `guardar_altura`, el desnivel de la mesa."""
+    return _llamar(control_brazo.cementerio_soltar, cuerpo.guardar, cuerpo.guardar_altura)
 
 
 @router.post("/centrar/subir")

@@ -438,3 +438,40 @@ def test_ejecutor_real_aplica_el_corrimiento_medido_a_las_casillas_del_tablero_y
     _jugar(ejecutor)
     destinos = [(l[1][0], l[1][1]) for l in historial if l[0] in ("MovJ", "MovL")]
     assert destinos[0] == pytest.approx((nominal[0] + 3.0, nominal[1] - 2.0))  # va sobre e2 con el corrimiento
+
+
+def test_ejecutor_real_en_el_cementerio_con_desnivel_baja_hasta_la_mesa_segun_la_altura_de_cada_pieza():
+    """La mesa del cementerio queda más baja que el tablero: al soltar, cada pieza baja ese desnivel (menos la holgura) desde SU altura de agarre, así su base queda a pocos mm de la mesa."""
+    parametros = ParametrosAgarre(
+        z_tope=100.0, margen_agarre_mm=20.0, margenes_por_pieza={"n": 27.5}, apertura_aproximacion=APERTURA, aperturas_por_pieza={"n": 840},
+        altura_segura_mm=80.0, desnivel_cementerio_mm=20.0, holgura_cementerio_mm=2.0, cementerio_origen=[900.0, 0.0],
+    )
+    ejecutor, _ = _ejecutor(parametros)
+
+    assert ejecutor._pose_de_soltar("cementerio:0", "p")[2] == pytest.approx(102.0)  # 100 + 20 − 20 + 2: la base del peón queda a 2 mm de la mesa
+    assert ejecutor._pose_de_soltar("cementerio:0", "n")[2] == pytest.approx(109.5)  # 100 + 27.5 − 20 + 2: el caballo se sostiene más arriba, así que la punta queda más alta
+    assert ejecutor._pose_de_soltar("e4", "p")[2] == pytest.approx(120.0)  # en el tablero no cambia: la altura de agarre más la elevación al soltar (0)
+
+
+def test_ejecutor_real_sin_desnivel_suelta_en_el_cementerio_como_siempre():
+    parametros = ParametrosAgarre(z_tope=100.0, margen_agarre_mm=3.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, elevacion_al_soltar_mm=4.0, cementerio_origen=[900.0, 0.0])
+    ejecutor, _ = _ejecutor(parametros)
+
+    assert ejecutor._pose_de_soltar("cementerio:0", "p")[2] == pytest.approx(107.0)  # 103 + 4: sin `desnivel_cementerio_mm` el cementerio se trata como parte del tablero
+
+
+def test_ejecutor_real_lleva_la_pieza_capturada_hasta_la_mesa_del_cementerio_y_en_el_tablero_la_suelta_a_su_altura_de_siempre():
+    parametros = ParametrosAgarre(
+        z_tope=100.0, margen_agarre_mm=20.0, apertura_aproximacion=APERTURA, altura_segura_mm=80.0, elevacion_al_soltar_mm=4.0,
+        desnivel_cementerio_mm=20.0, holgura_cementerio_mm=2.0, cementerio_origen=[900.0, 0.0],
+    )
+    ejecutor, historial = _ejecutor(parametros)
+    tablero_antes = chess.Board()
+    tablero_antes.push_san("e4")
+    tablero_antes.push_san("d5")
+
+    ejecutor.ejecutar_movimiento(tablero_antes, tablero_antes.parse_uci("e4d5"))
+
+    en_cementerio = [l[1][2] for l in historial if l[0] == "MovL" and (l[1][0], l[1][1]) == (900.0, 0.0)]
+    assert min(en_cementerio) == pytest.approx(102.0)  # el peón capturado baja hasta 2 mm de la mesa
+    assert 124.0 in [l[1][2] for l in historial if l[0] == "MovL"]  # y en d5 la suelta 4 mm sobre la altura de agarre (100 + 20 + 4)

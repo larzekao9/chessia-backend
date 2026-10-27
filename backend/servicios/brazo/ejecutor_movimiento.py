@@ -11,7 +11,7 @@ import chess
 from backend.servicios.brazo.calibracion_brazo import ParametrosAgarre
 from backend.servicios.brazo.cliente_dobot import ClienteDobot
 from backend.servicios.brazo import geometria_brazo, zonas
-from backend.servicios.brazo.planificador_movimiento import PREFIJO_CEMENTERIO, PREFIJO_RESERVA, Paso, planificar
+from backend.servicios.brazo.planificador_movimiento import PREFIJO_CEMENTERIO, PREFIJO_CEMENTERIO_JUGADOR, PREFIJO_RESERVA, Paso, planificar
 from backend.servicios.brazo.pinza_dh import AGARRE_SOSTIENE, POSICION_ABIERTA, PinzaDH
 
 
@@ -182,6 +182,14 @@ class EjecutorReal(EjecutorMovimiento):
             fila, columna = divmod(indice, max(1, p.cementerio_columnas))
             return (p.cementerio_origen[0] + columna * p.cementerio_paso[0] + fila * p.cementerio_paso_fila[0],
                     p.cementerio_origen[1] + columna * p.cementerio_paso[1] + fila * p.cementerio_paso_fila[1])
+        if lugar.startswith(PREFIJO_CEMENTERIO_JUGADOR):
+            p = self.parametros
+            if p.cementerio_jugador_origen is None:
+                raise RuntimeError("Falta calibrar el cementerio del jugador (cementerio_jugador_origen): ahí deja la persona las piezas que captura y de ahí toma el brazo la dama para coronar")
+            indice = int(lugar[len(PREFIJO_CEMENTERIO_JUGADOR):])
+            fila, columna = divmod(indice, max(1, p.cementerio_columnas))
+            return (p.cementerio_jugador_origen[0] + columna * p.cementerio_jugador_paso[0] + fila * p.cementerio_jugador_paso_fila[0],
+                    p.cementerio_jugador_origen[1] + columna * p.cementerio_jugador_paso[1] + fila * p.cementerio_jugador_paso_fila[1])
         if lugar.startswith(PREFIJO_RESERVA):
             nombre = lugar[len(PREFIJO_RESERVA):]
             if nombre not in self.parametros.reservas:
@@ -201,6 +209,27 @@ class EjecutorReal(EjecutorMovimiento):
         if p.altura_borde_mm and _es_casilla_del_borde(casilla):  # junto al marco del tablero los dedos no pueden bajar más que el marco (más 2 mm de aire)
             z = max(z, p.z_tope + p.altura_borde_mm + 2.0)
         return (x, y, z, rx, ry, rz + p.giro_diagonal_grados)
+
+    def _desnivel_de(self, lugar: str) -> float:
+        """Cuánto más abajo que la superficie del tablero queda el suelo de `lugar` (solo el cementerio, ver `ParametrosAgarre.desnivel_cementerio_mm`; el resto, 0)."""
+        return self.parametros.desnivel_cementerio_mm if lugar.startswith((PREFIJO_CEMENTERIO, PREFIJO_CEMENTERIO_JUGADOR)) else 0.0
+
+    def _pose_de_soltar(self, lugar: str, tipo_pieza: str = "p") -> tuple[float, ...]:
+        """Pose de la herramienta al SOLTAR una pieza de `tipo_pieza` en `lugar`.
+
+        En el tablero la punta se queda `elevacion_al_soltar_mm` sobre la altura de agarre (para no rozarlo). En el cementerio, si se midió su desnivel con la superficie del tablero, la pieza baja ese
+        desnivel hasta quedar a `holgura_cementerio_mm` de la mesa: como cada pieza se sostiene a su propia altura (su margen de agarre es cuánto quedan los dedos sobre su base), la altura de
+        la punta sale de la de agarre de ESA pieza, y todas apoyan sus bases a la misma distancia de la mesa en lugar de caer desde arriba.
+        """
+        p = self.parametros
+        if self._desnivel_de(lugar) > 0:
+            return self._pose(lugar, p.holgura_cementerio_mm - p.desnivel_cementerio_mm, tipo_pieza)
+        return self._pose(lugar, p.elevacion_al_soltar_mm, tipo_pieza)
+
+    def _pose_de_agarre(self, lugar: str, tipo_pieza: str = "p") -> tuple[float, ...]:
+        """Pose de la herramienta al AGARRAR una pieza de `tipo_pieza` en `lugar`. En el tablero es la altura de agarre; en el cementerio con desnivel, la pieza está apoyada en la mesa, más abajo,
+        así que la punta baja ese desnivel para tomarla por el mismo punto (la mitad de su altura) que en el tablero."""
+        return self._pose(lugar, -self._desnivel_de(lugar), tipo_pieza)
 
     def _seguro(self, tipo_pieza: str = "p") -> float:
         """Cuánto sobre la altura de agarre se sube para trasladar una pieza de `tipo_pieza` (ver `ParametrosAgarre.altura_de_traslado_para`)."""
@@ -243,7 +272,15 @@ class EjecutorReal(EjecutorMovimiento):
         if self.orientacion is None:
             raise RuntimeError("Falta la orientación (rx, ry, rz) de la herramienta: tomala de GetPose() con la pinza apuntando al tablero.")
         _ = self.parametros.z_agarre  # falla con un mensaje claro si falta la altura del tablero (el margen de cada pieza lo revisa ejecutar_pasos)
-        self.ejecutar_pasos(planificar(tablero_antes, jugada))
+        self.ejecutar_pasos(
+            planificar(
+                tablero_antes,
+                jugada,
+                por_piezas=self.parametros.cementerio_por_piezas,
+                columnas=self.parametros.cementerio_columnas,
+                peones_por_fila=self.parametros.cementerio_peones_por_fila,
+            )
+        )
 
     def ejecutar_pasos(self, pasos: list[Paso]) -> None:
         """Hace cada paso (agarrar en `origen`, soltar en `destino`) y deja el brazo en la posición cero. Es lo que usan `ejecutar_movimiento` y las pruebas
@@ -283,11 +320,10 @@ class EjecutorReal(EjecutorMovimiento):
         previo = zonas.punta_en_mm(self.angulos_cero, largo) if self.angulos_cero is not None else None
         if self.angulos_cero is not None:
             problemas += [f"la posición de descanso: {t}" for t in zonas.problemas_de_brazo(self.angulos_cero, p, largo)]
-        elevacion = p.elevacion_al_soltar_mm
         for paso in pasos:
             o, d, pz = paso.origen, paso.destino, paso.pieza
             seguro = self._seguro(pz)
-            camino = [self._pose(o, seguro, pz)[:3], self._pose(o, 0.0, pz)[:3], self._pose(o, seguro, pz)[:3], self._pose(d, seguro, pz)[:3], self._pose(d, elevacion, pz)[:3], self._pose(d, seguro, pz)[:3]]
+            camino = [self._pose(o, seguro, pz)[:3], self._pose_de_agarre(o, pz)[:3], self._pose(o, seguro, pz)[:3], self._pose(d, seguro, pz)[:3], self._pose_de_soltar(d, pz)[:3], self._pose(d, seguro, pz)[:3]]
             if previo is not None:
                 camino.insert(0, previo)
             for a, b in zip(camino, camino[1:]):
@@ -315,7 +351,7 @@ class EjecutorReal(EjecutorMovimiento):
         apertura = self.parametros.apertura_para(pieza)
         self.pinza.mover_a(apertura)
         self.cliente.mover_a_pose(self._pose(origen, seguro, pieza))
-        self.cliente.mover_a_pose(self._pose(origen, tipo_pieza=pieza), lineal=True, **self._lento())  # baja despacio: sin golpear el tablero
+        self.cliente.mover_a_pose(self._pose_de_agarre(origen, pieza), lineal=True, **self._lento())  # baja despacio: sin golpear el tablero (ni la mesa del cementerio)
         cierre = self.pinza.cerrar()
         if cierre.agarre != AGARRE_SOSTIENE:
             self._retirarse(origen, apertura, pieza)
@@ -328,6 +364,6 @@ class EjecutorReal(EjecutorMovimiento):
             self._retirarse(origen, apertura, pieza)
             raise PiezaNoAgarrada(f"Se le cayó la pieza de {origen} al subirla", reintentable=False)
         self.cliente.mover_a_pose(self._pose(destino, seguro, pieza), lineal=True)
-        self.cliente.mover_a_pose(self._pose(destino, self.parametros.elevacion_al_soltar_mm, pieza), lineal=True, **self._lento())  # no baja del todo al soltar y llega despacio
+        self.cliente.mover_a_pose(self._pose_de_soltar(destino, pieza), lineal=True, **self._lento())  # no baja del todo al soltar (en el cementerio baja hasta la mesa) y llega despacio
         self.pinza.mover_a(min(POSICION_ABIERTA, apertura + self.parametros.apertura_extra_soltar))  # soltar, más abierta que al agarrar
         self.cliente.mover_a_pose(self._pose(destino, seguro, pieza), lineal=True, **self._lento())

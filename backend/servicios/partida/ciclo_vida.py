@@ -65,6 +65,21 @@ def _a_datetime_utc(valor: str) -> datetime:
     return momento.astimezone(timezone.utc)
 
 
+_protegidas: set[str] = set()
+"""Partidas que NO se cierran ni se borran por abrir otra pantalla o por inactividad: la que está siguiendo la partida física (el tablero real). Sin esto, abrir la Sala de Control mientras
+se juega en el tablero (crea una partida y cierra las pendientes del mismo usuario) borraba la partida física y su estado fallaba con un 500 en cada consulta."""
+
+
+def proteger(partida_id: str) -> None:
+    """Marca `partida_id` como en uso por la partida física: `cerrar_partidas_pendientes` y `limpiar_partidas_inactivas` la dejan en paz."""
+    _protegidas.add(partida_id)
+
+
+def soltar(partida_id: str) -> None:
+    """Quita la protección de `proteger` (la partida física terminó o se detuvo)."""
+    _protegidas.discard(partida_id)
+
+
 def _cerrar_o_borrar(partida: Partida, repositorio: RepositorioPartidas) -> None:
     """Decide entre borrar o dar por perdida una partida `en_curso` que ya no
     hace falta conservar activa, según cuántas jugadas del jugador tiene: con
@@ -116,7 +131,7 @@ def cerrar_partidas_pendientes(repositorio: RepositorioPartidas, usuario_id: int
     **Excluye** partidas `humano` (salas): se retoman desde `GET /sala/activa`.
     """
     for partida in repositorio.listar_por_usuario(usuario_id):
-        if partida.estado != "en_curso" or partida.es_demostracion or partida.tipo_oponente == "humano":
+        if partida.estado != "en_curso" or partida.es_demostracion or partida.tipo_oponente == "humano" or partida.id in _protegidas:
             continue
         _cerrar_o_borrar(partida, repositorio)
 
@@ -148,7 +163,7 @@ def limpiar_partidas_inactivas(repositorio: RepositorioPartidas) -> None:
     ahora = datetime.now(timezone.utc)
     en_curso: set[str] = set()
     for partida in repositorio.listar():
-        if partida.estado != "en_curso" or partida.es_demostracion or partida.tipo_oponente == "humano":
+        if partida.estado != "en_curso" or partida.es_demostracion or partida.tipo_oponente == "humano" or partida.id in _protegidas:
             continue
         if dar_por_perdida_si_ausente(partida, repositorio):
             continue

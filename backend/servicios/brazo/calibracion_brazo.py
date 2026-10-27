@@ -203,6 +203,13 @@ class ParametrosAgarre:
     """Aceleración (%) de esos mismos tramos."""
     elevacion_al_soltar_mm: float = 0.0
     """Al SOLTAR una pieza (en una casilla o en el cementerio) la punta se queda esto más arriba que al agarrar: si los dedos bajan del todo al soltar, rozan o chocan con el tablero. Se suma a la altura de agarre de esa pieza."""
+    desnivel_cementerio_mm: float = 0.0
+    """Cuánto más BAJA que la superficie de juego del tablero está la mesa donde se dejan las piezas capturadas (el espesor del tablero, unos 20 mm). Con 0 el cementerio se trata
+    como si estuviera a la altura del tablero (se suelta con `elevacion_al_soltar_mm`). Con un valor mayor, al soltar en el cementerio la pieza BAJA ese desnivel: cada pieza se sostiene a
+    su propia altura (`margen_para`: cuánto quedan sus dedos por encima de su base), así que su base queda a `holgura_cementerio_mm` de la mesa y no se cae desde arriba. Nunca baja la punta de
+    los dedos más que `z_tope` mientras el margen de la pieza sea al menos el desnivel (el margen es de la mitad de su altura: 20 mm el peón)."""
+    holgura_cementerio_mm: float = 2.0
+    """Aire (mm) entre la base de la pieza y la mesa del cementerio al soltarla, cuando hay `desnivel_cementerio_mm`: lo justo para no apoyarla ni empujarla contra la mesa."""
     apertura_extra_soltar: int = 250
     """Cuánto más se abre la pinza al SOLTAR que al agarrar (se suma a la apertura de la pieza, tope 1000): así los dedos quedan bien lejos de la pieza."""
     aperturas_por_pieza: dict[str, int] = field(default_factory=dict)
@@ -233,6 +240,19 @@ class ParametrosAgarre:
     cementerio_paso_fila: list[float] = field(default_factory=lambda: [0.0, 30.0])
     """(dx, dy) de una fila del cementerio a la siguiente (mm)."""
     cementerio_columnas: int = 8
+    cementerio_por_piezas: bool = False
+    """Cementerios ORDENADOS por piezas, en dos zonas con el mismo orden: el del brazo (`cementerio_origen`…), donde el brazo deja las blancas que captura, y el del jugador
+    (`cementerio_jugador_origen`…), del lado contrario del tablero, donde la persona deja las negras que captura (y el brazo su peón coronado). Cada zona tiene 2 filas de 8: peones (la más cercana
+    al tablero) y, en línea recta, caballos, alfiles, torres y damas. La dama para coronar la toma el brazo de las dos casillas de dama del cementerio del jugador. Necesita
+    `cementerio_columnas` de al menos 8. Con `False`, las piezas se dejan por orden de llegada en una sola zona y la dama sale de `reservas`."""
+    cementerio_peones_por_fila: int = 8
+    """Cuántos peones van en cada fila del bloque de peones (`cementerio_por_piezas`): 8 es una fila; 4, un bloque de 4 × 2 (cuadrado). Las demás piezas van en línea recta en la fila siguiente."""
+    cementerio_jugador_origen: list[float] | None = None
+    """(x, y) de la primera casilla del cementerio del JUGADOR (solo con `cementerio_por_piezas`), del lado contrario al del brazo, a la altura de la mesa. Mismo tamaño y orden que el del brazo."""
+    cementerio_jugador_paso: list[float] = field(default_factory=lambda: [30.0, 0.0])
+    """(dx, dy) de una casilla a la siguiente de la misma fila del cementerio del jugador (mm)."""
+    cementerio_jugador_paso_fila: list[float] = field(default_factory=lambda: [0.0, 30.0])
+    """(dx, dy) de una fila del cementerio del jugador a la siguiente (mm)."""
     reservas: dict[str, list[float]] = field(default_factory=dict)
     """(x, y) de las piezas de reserva para coronar: `"dama_blanca"`, `"dama_negra"`."""
 

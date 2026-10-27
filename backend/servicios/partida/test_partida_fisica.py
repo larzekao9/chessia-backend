@@ -46,6 +46,7 @@ def mundo(monkeypatch):
     monkeypatch.setattr(seguimiento_vivo, "capturar_foto_tablero", capturar)
     monkeypatch.setattr(pf._camara, "capturar_foto_tablero", capturar)
     monkeypatch.setattr(pf.referencia_vacia, "ocupadas", ocupadas)
+    monkeypatch.setattr(pf, "ESPERA_PARA_DESPEJAR_S", 0.0)  # las pruebas de «no coincide» no esperan a que se despeje el tablero (ver la prueba de la mano)
     monkeypatch.setattr(servicio_partida, "crear_estrategia_jugada", lambda *_a, **_k: Turing())
     monkeypatch.setattr(servicio_partida, "analizar_posicion", lambda *_a, **_k: {})
     monkeypatch.setattr(servicio_partida, "_calidad_de_la_jugada_humana", lambda *_a, **_k: None)
@@ -140,6 +141,46 @@ def test_si_el_tablero_no_coincide_tras_la_jugada_del_brazo_hay_incidente(mundo)
     mundo.ocupacion_torcida = ["a3", "h3"]  # la cámara ve dos casillas distintas a la posición
     _mover_a_mano(mundo, sesion, "e2e4")
     assert sesion.estado == pf.INCIDENTE and "a3" in sesion.incidente
+
+
+def test_una_mano_que_tapa_el_tablero_tras_la_jugada_del_brazo_no_da_incidente_si_se_retira(mundo, monkeypatch) -> None:
+    """La cámara ve dos casillas distintas porque una mano sigue sobre el tablero: se espera, y al retirarla la partida sigue sin incidente."""
+    sesion = _empezar(mundo)
+    monkeypatch.setattr(pf, "ESPERA_PARA_DESPEJAR_S", 5.0)
+    monkeypatch.setattr(pf, "PAUSA_ENTRE_REVISIONES_S", 0.0)
+    mundo.ocupacion_torcida = ["f2", "h2"]
+
+    def retirar_la_mano(_segundos) -> None:
+        mundo.ocupacion_torcida = None
+
+    monkeypatch.setattr(pf.time, "sleep", retirar_la_mano)
+
+    _mover_a_mano(mundo, sesion, "e2e4")
+
+    assert sesion.estado == pf.ESPERANDO_HUMANO and not sesion.incidente
+    assert any("Se despejó el tablero" in e["texto"] for e in sesion.eventos)
+
+
+def test_si_la_partida_desaparece_el_estado_responde_que_se_descarto_y_no_falla(mundo) -> None:
+    sesion = _empezar(mundo)
+    servicio_partida._repositorio.eliminar(sesion.partida_id)  # por ejemplo, otra pantalla la borró
+
+    primero = pf.estado()
+    segundo = pf.estado()  # y las consultas siguientes tampoco fallan
+
+    assert primero["activa"] is False and primero["descartada"] is True and "desapareció" in primero["mensaje"]
+    assert segundo["activa"] is False and segundo["descartada"] is True
+
+
+def test_abrir_otra_pantalla_que_crea_una_partida_no_borra_la_de_la_partida_fisica(mundo) -> None:
+    partida = servicio_partida.crear_partida(nivel=5, tipo_oponente="modelo", usuario_id=7)
+    mundo.fisico = partida.fen
+    pf.iniciar(partida.id, intervalo=0, con_hilo=False)
+
+    servicio_partida.crear_partida(nivel=5, tipo_oponente="modelo", usuario_id=7)  # la Sala de Control crea una al abrirse y cierra las pendientes del usuario
+
+    assert servicio_partida.obtener_partida(partida.id).id == partida.id
+    assert pf.estado()["activa"] is True
 
 
 def test_una_casilla_dudosa_se_avisa_pero_no_frena(mundo) -> None:

@@ -28,7 +28,7 @@ import chess
 import numpy as np
 
 from backend.servicios.brazo import servicio_brazo
-from backend.servicios.partida import servicio_partida
+from backend.servicios.partida import ciclo_vida, servicio_partida
 from backend.servicios.vision import camara as _camara
 from backend.servicios.vision import referencia_vacia, seguimiento_vivo
 
@@ -52,6 +52,11 @@ CUADROS_PARA_BASE = 12
 """Segundos que se espera, como máximo, a que el tablero quede quieto para tomar la foto base tras la jugada del brazo (con un intervalo real; en las pruebas, cuadros)."""
 DIFERENCIAS_TOLERADAS = 1
 """Casillas ocupadas distintas entre la cámara y la posición que se avisan pero no frenan la partida; con más, incidente."""
+ESPERA_PARA_DESPEJAR_S = 4.0
+"""Si tras la jugada del brazo la cámara ve más casillas distintas de las toleradas, se vuelve a mirar durante este tiempo antes de dar un incidente: lo más común es una mano
+(o el brazo) que sigue sobre el tablero, y la cámara la ve como piezas donde no las hay."""
+PAUSA_ENTRE_REVISIONES_S = 0.5
+"""Cada cuánto se vuelve a mirar mientras se espera a que se despeje el tablero."""
 
 
 class Ocupado(Exception):
@@ -237,6 +242,8 @@ class PartidaFisica:
             self._hacer_incidente("El tablero no quedó quieto después de la jugada del brazo.")
             return
         diferencias = self._diferencias_de_ocupacion(fen)
+        if diferencias is not None and len(diferencias) > DIFERENCIAS_TOLERADAS:
+            diferencias = self._esperar_a_que_se_despeje(fen, diferencias)
         if diferencias is None:
             self._registrar("Sin foto del tablero vacío: no se pudo verificar la ocupación (se sigue igual).")
         elif len(diferencias) > DIFERENCIAS_TOLERADAS:
@@ -247,6 +254,32 @@ class PartidaFisica:
         self.pendiente = None
         if not self._terminar_si_corresponde():
             self._fijar(ESPERANDO_HUMANO, "Tu turno.")
+
+    def _esperar_a_que_se_despeje(self, fen: str, diferencias: list[str]) -> list[str]:
+        """Una mano (o el brazo) tapando el tablero hace que la cámara vea piezas donde no las hay: antes de dar un incidente se vuelve a mirar hasta `ESPERA_PARA_DESPEJAR_S`.
+
+        Si se despeja, se vuelve a tomar la foto base (se había tomado con la mano puesta y, al retirarla, parecería una jugada). Devuelve las diferencias de la última mirada.
+        """
+        limite = time.monotonic() + ESPERA_PARA_DESPEJAR_S
+        esperando = False
+        while len(diferencias) > DIFERENCIAS_TOLERADAS and time.monotonic() < limite and not self._parar.is_set():
+            esperando = True
+            self._fijar(VERIFICANDO, f"Algo tapa el tablero en {', '.join(diferencias[:4])} (¿una mano?): esperando a que se despeje…")
+            time.sleep(PAUSA_ENTRE_REVISIONES_S)
+            try:
+                nuevas = self._diferencias_de_ocupacion(fen)
+            except RuntimeError:
+                break
+            if nuevas is None:
+                break
+            diferencias = nuevas
+        if esperando and len(diferencias) <= DIFERENCIAS_TOLERADAS:
+            try:
+                seguimiento_vivo.fijar_posicion(fen, rapido=True)
+                self._registrar("Se despejó el tablero: foto base nueva.")
+            except (seguimiento_vivo.SinSeguimiento, RuntimeError):
+                pass
+        return diferencias
 
     def _diferencias_de_ocupacion(self, fen: str) -> list[str] | None:
         """Casillas que la cámara ve ocupadas o vacías al revés de lo que dice `fen`; `None` si no se puede verificar (no hay foto del tablero vacío)."""
@@ -322,6 +355,7 @@ class PartidaFisica:
             "jugadas": partida.jugadas_san, "terminada": partida.terminada, "resultado": partida.resultado if partida.terminada else None,
             "usa_brazo": partida.usa_brazo, "camara": self.camara, "seguimiento": self.ultimo_seguimiento, "eventos": list(self.eventos)[-20:],
             "rendimiento": seguimiento_vivo.rendimiento(),
+            "cementerio": servicio_brazo.resumen_del_cementerio(partida.tablero),
             "referencia_vacia": referencia_vacia.cargar_referencia(self.camara) is not None,
             "puede_reintentar": self.estado == INCIDENTE and self.pendiente is not None and partida.usa_brazo,
         }
@@ -346,6 +380,7 @@ class PartidaFisica:
     def detener(self) -> None:
         self._parar.set()
         self.estado = DETENIDA
+        ciclo_vida.soltar(self.partida_id)
         self._registrar("Detenida")
 
 
@@ -365,6 +400,8 @@ def _san_de(pendiente: tuple[chess.Board, chess.Move]) -> str:
 # --- la única partida física del backend ---------------------------------------------------------------------------------------------------
 _cerrojo = threading.Lock()
 _actual: PartidaFisica | None = None
+_descarte: str | None = None
+"""Por qué se cortó sola la partida física (su partida desapareció): se informa en el estado hasta que se empiece otra."""
 
 
 class SinPartidaFisica(Exception):
@@ -377,7 +414,7 @@ def iniciar(partida_id: str, camara: str = "principal", intervalo: float = INTER
     Raises:
         KeyError: no existe la partida. ValueError: la partida terminó, el seguimiento no puede empezar (cámara sin calibrar) o no le toca al humano.
     """
-    global _actual
+    global _actual, _descarte
     partida = servicio_partida.obtener_partida(partida_id)
     if partida.terminada:
         raise ValueError("La partida ya terminó")
@@ -388,6 +425,8 @@ def iniciar(partida_id: str, camara: str = "principal", intervalo: float = INTER
             _actual.detener()
         seguimiento_vivo.iniciar(partida.fen, camara, intervalo or 1.0)  # intervalo 0 = sin pausas (pruebas): se cuenta como el ritmo de siempre
         nueva = PartidaFisica(partida_id, camara, intervalo)
+        ciclo_vida.proteger(partida_id)  # otra pantalla que cree una partida no la borra (ver `ciclo_vida._protegidas`)
+        _descarte = None
         nueva._registrar(f"Iniciada con oponente '{partida.tipo_oponente}'" + (" y brazo" if partida.usa_brazo else " (sin brazo: movés vos las piezas del robot)"))
         _actual = nueva
         if con_hilo:
@@ -409,8 +448,12 @@ def sesion() -> PartidaFisica:
 def estado(con_vista: bool = False) -> dict:
     """Dónde está la partida física; con `con_vista`, suma `vista`: las fotos base y actual y la comparación del seguimiento (ver `seguimiento_jugadas.renderizar_vista`)."""
     if _actual is None or _actual.estado == DETENIDA:
-        return {"activa": False}
-    datos = _actual.estado_actual()
+        return {"activa": False, **({"descartada": True, "mensaje": _descarte} if _descarte else {})}
+    try:
+        datos = _actual.estado_actual()
+    except KeyError:  # la partida ya no existe (se borró): no hay nada que seguir, y no se responde un 500 en cada consulta
+        _descartar("La partida física se descartó porque la partida desapareció (por ejemplo, otra pantalla creó una nueva). Empezá otra.")
+        return {"activa": False, "descartada": True, "mensaje": _descarte}
     if con_vista:
         try:
             datos["vista"] = seguimiento_vivo.vista()
@@ -419,11 +462,20 @@ def estado(con_vista: bool = False) -> dict:
     return datos
 
 
+def _descartar(motivo: str) -> None:
+    """Corta la partida física porque su partida ya no existe, y deja dicho por qué."""
+    global _descarte
+    logger.warning("Se descarta la partida física: %s", motivo)
+    detener()
+    _descarte = motivo
+
+
 def detener() -> dict:
-    global _actual
+    global _actual, _descarte
     with _cerrojo:
         if _actual is not None:
             _actual.detener()
         _actual = None
+        _descarte = None
     seguimiento_vivo.detener()
     return {"activa": False}

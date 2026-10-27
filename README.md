@@ -83,6 +83,15 @@ Para desarrollo local conviene arrancarlo con `python scripts/iniciar_backend.py
 `--reload`): con `uvicorn` a secas, `Ctrl+C` se queda esperando mientras haya un video de la cámara abierto en el
 navegador; el lanzador fija un tiempo máximo de cierre de 3 segundos.
 
+### Si el backend se pone lento o parece colgarse
+
+- **En la consola de Windows:** si al seleccionar texto o hacer clic en la ventana el backend se frena y sigue al apretar `Enter`, es el modo «Edición rápida» de la consola. Se desactiva
+  en el menú de la ventana → Propiedades → Opciones → «Modo de edición rápida», o se corre el backend desde una terminal nueva (Windows Terminal).
+- **El registro avisa solo:** cuando un pedido tarda más de 2 s en empezar a responder aparece `Pedido lento: GET /ruta tardó N s...`, y cuando hay 25 o más esperando a la vez, cuáles son
+  (`backend/medicion.py`). Pasame esa línea y se ve qué lo frenó. Se ajusta con `PETICION_LENTA_SEGUNDOS`, `PETICIONES_SIMULTANEAS_AVISO` y `HILOS_MAXIMOS` (por defecto 100 hilos para las rutas).
+- Las consultas de estado que salen bien (`/partida-fisica/estado`, `/brazo/estado`…) ya no se anotan en la consola.
+- **Buscar cámaras** («Elegir cámaras») suelta la cámara en uso y la bloquea hasta 6 s: con una partida física en marcha el backend lo rechaza (409). Detené la partida primero.
+
 ## Tests
 
 ```bash

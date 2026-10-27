@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from backend.medicion import FiltroAccesoSondeos, MedidorDePeticiones, ajustar_hilos
 from backend.seguridad import CabecerasSeguridad, origenes_permitidos
 from backend.rutas.ruta_brazo import router as brazo_router
 from backend.rutas.ruta_brazo_control import router as brazo_control_router
@@ -66,6 +67,10 @@ async def lifespan(app: FastAPI):
     (`servicio_sala.limpiar_salas_inactivas`) — tolera que esto falle sin
     impedir que el backend levante."""
     try:
+        logger.info("Hilos para las rutas síncronas: %d", await ajustar_hilos())
+    except Exception:
+        logger.exception("No se pudo ajustar el máximo de hilos")
+    try:
         limpiar_partidas_inactivas()
     except Exception:
         logger.exception("No se pudo limpiar partidas pendientes al arrancar el backend")
@@ -84,6 +89,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Ajedrez Backend", lifespan=lifespan)
+logging.getLogger("uvicorn.access").addFilter(FiltroAccesoSondeos())  # las consultas de estado que salen bien no se anotan: ver `backend/medicion.py`
 
 _origenes = origenes_permitidos()
 app.add_middleware(CabecerasSeguridad)
@@ -95,6 +101,7 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+app.add_middleware(MedidorDePeticiones)  # el más externo: mide todo y avisa de los pedidos lentos
 
 app.include_router(jugada_router)
 app.include_router(partida_router)

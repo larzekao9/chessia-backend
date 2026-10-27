@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 import chess
 
@@ -20,11 +21,39 @@ from backend.servicios.brazo import control_brazo
 from backend.servicios.brazo.calibracion_brazo import cargar_calibracion_brazo, cargar_parametros_agarre
 from backend.servicios.brazo.ejecutor_movimiento import EjecutorMovimiento
 from backend.servicios.brazo.fabrica_ejecutores import crear_ejecutor_movimiento
+from backend.servicios.brazo.planificador_movimiento import resumen_del_cementerio as _resumen_del_cementerio
 
 logger = logging.getLogger(__name__)
 
 _ejecutor: EjecutorMovimiento | None = None
 _ultima_jugada: str | None = None
+
+
+_config_cementerio: tuple[float, bool, int] = (float("-inf"), False, 8)
+SEGUNDOS_DE_CACHE_CEMENTERIO = 2.0
+"""Cada cuánto se vuelve a mirar cómo está armado el cementerio: la pantalla de la partida física lo pide varias veces por segundo."""
+
+
+def _configuracion_del_cementerio() -> tuple[bool, int]:
+    """`(ordenado por piezas, peones por fila)` del brazo: lo que tiene el ejecutor en uso o, si todavía no hay ninguno, lo guardado en la calibración."""
+    global _config_cementerio
+    ahora = time.monotonic()
+    if ahora - _config_cementerio[0] < SEGUNDOS_DE_CACHE_CEMENTERIO:
+        return _config_cementerio[1], _config_cementerio[2]
+    try:
+        parametros = getattr(_ejecutor, "parametros", None) or cargar_parametros_agarre()
+        por_piezas = bool(parametros is not None and parametros.cementerio_por_piezas)
+        peones = int(parametros.cementerio_peones_por_fila) if parametros is not None else 8
+    except Exception:  # noqa: BLE001 - dibujar el cementerio nunca debe romper el estado de la partida
+        por_piezas, peones = False, 8
+    _config_cementerio = (ahora, por_piezas, peones)
+    return por_piezas, peones
+
+
+def resumen_del_cementerio(tablero: chess.Board) -> dict:
+    """Los cementerios para dibujarlos en pantalla (ver `planificador_movimiento.resumen_del_cementerio`): el brazo juega con negras, así que las blancas capturadas las deja él y las negras, la persona."""
+    por_piezas, peones_por_fila = _configuracion_del_cementerio()
+    return _resumen_del_cementerio(tablero, por_piezas, peones_por_fila=peones_por_fila)
 
 
 def _calibracion_del_brazo() -> dict:

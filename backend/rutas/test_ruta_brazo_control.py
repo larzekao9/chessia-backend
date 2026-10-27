@@ -231,7 +231,7 @@ def test_probar_lugar_del_cementerio_y_las_reservas_en_el_emulador(cliente) -> N
                 break
             time.sleep(0.1)
         assert tarea["estado"] == "terminada", (lugar, tarea)
-    for malo in ("cementerio:30", "cementerio:x", "e4", "reserva:torre"):
+    for malo in ("cementerio:72", "cementerio:x", "e4", "reserva:torre"):
         assert probar(malo).status_code == 422, malo
     cliente.put("/brazo/control/parametros", json={"valores": {"cementerio_origen": None}})
     assert probar("cementerio:0").status_code == 409  # sin calibrar no se mueve

@@ -461,3 +461,53 @@ flageado como tarea de entorno aparte.
 **Pruebas con el brazo real** (`scripts/probar_jugada_brazo.py`, sin capturas): peón e2→e4 movido y soltado correctamente; caballo b1→c3 con apertura 860, tres corridas seguidas sin error, y la dama (apertura medida con el script de ajuste) movida con posición inicial sin el peón de d2. Scripts de diagnóstico: `--solo-bajar`, `--solo-cerrar` (imprime posición y estado cada 0,1 s), `--fuerza`, `--margen-agarre`, `--fen`; y `scripts/probar_agarre_pinza.py` para la pinza sola.
 
 **Pendiente.** Aperturas medidas de alfil, torre y rey; verificar la altura Z en las cuatro esquinas con los dedos nuevos; pegar goma fina en los dedos; capturas, enroque, captura al paso y coronación; verificar la jugada con la cámara.
+
+## 2026-10-27: el cementerio baja hasta la mesa (cada pieza a su altura)
+
+**Problema.** Al llevar una pieza capturada al cementerio, el brazo la soltaba a la misma altura que en el tablero (la altura de agarre más `elevacion_al_soltar_mm`). Pero el cementerio queda fuera del tablero, sobre la mesa, que está unos 2 cm más abajo que la superficie de juego: la pieza caía desde arriba y las altas, como el peón, quedaban tiradas.
+
+**Cómo agarra el brazo.** La punta de los dedos queda a `margen_para(pieza)` sobre la base de la pieza (la mitad de su altura: 20 mm el peón, 31,5 mm la dama). O sea que, al llevar una pieza, su base cuelga por debajo de los dedos esa distancia.
+
+**Qué se cambió.** Hay dos parámetros nuevos de la pinza (en `agarre` de `brazo.json` y en el panel de parámetros):
+- `desnivel_cementerio_mm`: cuánto más baja que la superficie del tablero está la mesa del cementerio (0 = como antes: el cementerio se trata como parte del tablero).
+- `holgura_cementerio_mm` (por defecto 2): el aire que queda entre la base de la pieza y la mesa al soltarla.
+
+Con desnivel, al soltar en el cementerio la punta baja a `z_tope + margen_de_la_pieza + holgura − desnivel`: cada pieza se sostiene a su altura, así que **todas apoyan la base a 2 mm de la mesa**. Ejemplo con `z_tope = 225,6`, desnivel 20 y holgura 2: peón 227,6 mm (antes 249,6), caballo 235,1, dama 239,1. La punta no baja nunca de `z_tope` mientras el margen de la pieza sea al menos el desnivel. El tramo de traslado sobre el cementerio sigue a la altura segura de siempre; solo cambia el último descenso (lento) y la subida. La prueba «Probar lugar» (sin pieza) también baja hasta 25 mm sobre donde soltaría. En el tablero no cambia nada.
+
+**Cómo medir el desnivel (mejor que con regla).** Con la pinza cerrada y sin pieza, llevá la punta de los dedos a rozar la mesa sobre la primera casilla del cementerio, leé la Z con `GetPose()` y restala de `z_tope`. Conviene dejar 1 o 2 mm de menos: si el valor es mayor que el real, la base de la pieza se apoyaría contra la mesa antes de soltar.
+
+**Valores dejados en `calibracion_local/brazo.json` de Hebert:** `desnivel_cementerio_mm = 20`, `holgura_cementerio_mm = 2` (el espesor del tablero que se midió). Ese archivo no se versiona: hay que pasárselo a Luis o cargar los dos valores en su panel.
+
+**Antes de usarlo con el brazo real** (solo con Hebert en el laboratorio): velocidad global al 20 %, una mano en la parada de emergencia, primero «Probar lugar» en `cementerio:0` sin pieza, y después un peón. Si la base roza la mesa, bajar el desnivel unos mm; si la suelta desde arriba, subirlo.
+
+**Pendiente.** Las damas de reserva (`reserva:dama_*`) se agarran a la altura del tablero: si están sobre la mesa y no sobre una base a la altura del tablero, hay que sumarles el mismo desnivel. El orden de las casillas del cementerio sigue siendo por llegada (casilla 1 a 30).
+
+## 2026-10-27: dos cementerios ordenados por piezas y coronación con la dama del propio cementerio
+
+**Coronación.** Turing no elige la pieza: la red le da el mismo puntaje a las cuatro coronaciones y, como el brazo solo tiene una dama por bando, la respuesta se fuerza siempre a dama (`forzar_dama`, `coronar_solo_a_dama`). Es legal tener dos damas: el brazo retira el peón y pone en la casilla una dama, aunque Turing todavía tenga la suya.
+
+**Problema.** La dama de reserva estaba en `reservas`, en otro lado de la mesa, y era una sola: una segunda coronación iba a un lugar vacío. Y las capturadas se dejaban por orden de llegada, así que un peón podía quedar entre piezas altas.
+
+**Dos cementerios con el mismo orden (`cementerio_por_piezas`, apagado por defecto).** Cada uno tiene 2 filas de 8 casillas (la cuadrícula calibrada: origen, paso entre casillas y paso entre filas):
+- **Fila 1, junto al tablero: peones.**
+- **Fila 2, en línea recta: caballos (casillas 1–2), alfiles (3–4), torres (5–6) y damas (7–8).**
+
+| Cementerio | Dónde | Qué recibe | Lo deja |
+|---|---|---|---|
+| del brazo (`cementerio:K`, K de 0 a 15) | del lado del brazo (`cementerio_origen`…) | piezas **blancas** | el brazo, cuando captura |
+| del jugador (`cementerio_jugador:K`, K de 0 a 15) | del lado contrario del tablero (`cementerio_jugador_origen`…) | piezas **negras** | la persona, cuando captura; y el brazo su peón coronado |
+
+Cada uno toma de su propio cementerio la dama para coronar: **el brazo, de las casillas 7 y 8 de la fila de piezas del cementerio del jugador** (`cementerio_jugador:14` la primera coronación, `:15` la segunda; una tercera avisa que no hay lugar); la persona, de la dama blanca que dejó el brazo. Ahí la persona deja la dama negra que capturó o una de repuesto. En este modo `reservas` no se usa. Cada pieza va siempre a su lugar (el índice sale de cuántas de ese tipo y color ya faltan en el tablero, así no hay un contador que se desincronice). Las piezas del cementerio se agarran y se sueltan a la altura de la mesa (`desnivel_cementerio_mm`).
+
+**En pantalla.** Debajo del tablero de la partida física se dibujan los dos cementerios con una sombra donde va cada pieza: las ocupadas se ven nítidas, la pieza que acaba de salir del tablero se marca 25 s y las damas para coronar llevan una «R». El estado de la partida trae `cementerio` (lugares ocupados y damas usadas), calculado con las mismas funciones del planificador.
+
+**Cómo activarlo.** En «Cámara y Brazo → Cementerio y reservas»: llevar la punta a la primera casilla de cada cementerio y «Usar la posición actual» (la propuesta automática pone el del jugador del lado contrario al del brazo), dejar las casillas por fila en 8, tildar «Ordenar el cementerio por piezas», probar sin pieza (`cementerio:0`, `cementerio:15`, `cementerio_jugador:0`, `:14`, `:15`) y aplicar con «Guardar». Antes, dejar una o dos damas negras en las casillas 7 y 8 de la fila de piezas del cementerio del jugador. El largo del tablero (39,8 cm) da 49,75 mm por casilla: con ese paso entre casillas, cada fila queda alineada con las columnas del tablero.
+
+**Rango de casillas.** El del brazo, 0 a 31 (por orden de llegada se siguen usando las 30 primeras; ordenado, las 16 primeras). El del jugador, 0 a 15.
+
+**Ajustar el cementerio con flechas (en vez de escribir milímetros).** Dentro de «Cementerio y damas de reserva», el bloque «Ajustar el cementerio con flechas» funciona como «Centrar la pinza»: se elige el cementerio (del brazo o del jugador), la casilla a ajustar y la pieza que se simula; «Bajar» lleva la pinza, sin pieza y con los dedos abiertos, hasta donde SOLTARÍA esa pieza (a la altura de la mesa) y la deja suspendida; las flechas la mueven de a 0,5, 1, 2 o 5 mm (hacia las columnas a/h, las filas 1/8, y más arriba o más abajo) hasta que caiga en el centro de la casilla; «Guardar la posición» guarda lo que defina esa casilla y «Guardar la altura» fija el desnivel de la mesa para que la base de esa pieza quede a `holgura_cementerio_mm`. Qué define cada casilla:
+- **casilla 1** (la primera de los peones): el origen del cementerio;
+- **casilla 2 u 8** (otra de la primera fila): el paso entre casillas (la distancia al origen dividida las casillas que hay; la 8 es más precisa);
+- **casilla 9** (la primera de la fila de piezas): el paso entre filas.
+
+Se repite en el otro cementerio. Con el brazo real queda en `brazo.json`. Se empieza con un peón y la casilla 9 con un caballo; al final se prueba la dama («Probar sin pieza»), que es la más alta y la que más cuenta que el hueco alcance.

@@ -618,7 +618,13 @@ def flujo_en_vivo(
 
 @router.get("/camaras")
 def listar_camaras(_facilitador_id: int = Depends(get_current_principal)) -> dict:
-    """Cámaras que abre este equipo (índices 0 a 5) y cuáles están asignadas como principal y secundaria. Corta el video un instante."""
+    """Cámaras que abre este equipo (índices 0 a 5) y cuáles están asignadas como principal y secundaria. Corta el video un instante.
+
+    409 si hay una partida física en marcha: la búsqueda suelta la cámara en uso y tiene tomado su cerrojo hasta 6 s, y en ese tiempo el reconocimiento de jugadas se frena."""
+    from backend.servicios.partida import partida_fisica
+
+    if partida_fisica.estado().get("activa"):
+        raise HTTPException(status_code=409, detail="Hay una partida física en marcha: buscar cámaras corta el video y frena el reconocimiento. Detené la partida antes de elegir otra cámara.")
     asignadas = {
         nombre: (
             None

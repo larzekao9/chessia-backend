@@ -11,15 +11,36 @@ las conexiones que sigan abiertas y el proceso termina.
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import sys
 from pathlib import Path
 
 import uvicorn
 
 RAIZ = Path(__file__).resolve().parent.parent
 SEGUNDOS_CIERRE = 3
+DEPENDENCIAS_DEL_BACKEND = ("sqlalchemy", "fastapi", "chess")
+
+
+def _avisar_si_falta_el_entorno() -> None:
+    """Si este Python no tiene las dependencias del backend (casi siempre: se abrió una terminal sin el entorno de conda `ajedrez`), lo dice con claridad y sale."""
+    faltan = [nombre for nombre in DEPENDENCIAS_DEL_BACKEND if importlib.util.find_spec(nombre) is None]
+    if not faltan:
+        return
+    print(
+        f"\nEste Python ({sys.executable}) no tiene: {', '.join(faltan)}.\n"
+        "El backend se corre con el entorno de conda `ajedrez` (ver el README):\n"
+        "    conda activate ajedrez\n"
+        "    python scripts/iniciar_backend.py\n"
+        "o, sin activar nada, con el Python del entorno:\n"
+        '    & "$env:USERPROFILE\\miniconda3\\envs\\ajedrez\\python.exe" scripts\\iniciar_backend.py\n',
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 
 def main() -> None:
+    _avisar_si_falta_el_entorno()
     parser = argparse.ArgumentParser(description="Arranca el backend con cierre rápido.")
     parser.add_argument("--host", default="127.0.0.1", help="dirección en la que escucha (por defecto, solo esta máquina)")
     parser.add_argument("--port", type=int, default=8000)

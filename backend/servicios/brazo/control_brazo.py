@@ -27,7 +27,7 @@ from backend.servicios.brazo.calibracion_brazo import (
     guardar_calibracion_brazo,
     guardar_parametros_agarre,
 )
-from backend.servicios.brazo import geometria_brazo, rutinas, zonas
+from backend.servicios.brazo import ajuste_cementerio, geometria_brazo, rutinas, zonas
 from backend.servicios.brazo.cliente_dobot import MODOS_DE_FALLA, ErrorDobot
 from backend.servicios.brazo.ejecutor_movimiento import EjecutorReal
 from backend.servicios.brazo.planificador_movimiento import Paso, cementerio
@@ -227,7 +227,7 @@ def parar() -> dict:
 # --- parámetros -----------------------------------------------------------------------------------------------------------
 _RANGOS = {
     "velocidad_global": (1, 100), "aceleracion": (1, 100), "velocidad": (1, 100), "fuerza": (20, 100), "velocidad_pinza": (1, 100),
-    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 60), "corrimiento_x_mm": (-30, 30), "corrimiento_y_mm": (-30, 30), "altura_borde_mm": (0, 50), "holgura_traslado_mm": (0, 60), "elevacion_al_soltar_mm": (0, 30), "velocidad_bajada": (1, 100), "aceleracion_bajada": (1, 100), "giro_diagonal_grados": (-180, 180),
+    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 60), "corrimiento_x_mm": (-30, 30), "corrimiento_y_mm": (-30, 30), "altura_borde_mm": (0, 50), "holgura_traslado_mm": (0, 60), "elevacion_al_soltar_mm": (0, 30), "desnivel_cementerio_mm": (0, 60), "holgura_cementerio_mm": (0, 20), "velocidad_bajada": (1, 100), "aceleracion_bajada": (1, 100), "giro_diagonal_grados": (-180, 180),
 }
 
 
@@ -242,7 +242,9 @@ def parametros() -> dict:
         "margen_agarre_mm": agarre.margen_agarre_mm, "elevacion_al_soltar_mm": agarre.elevacion_al_soltar_mm, "velocidad_bajada": agarre.velocidad_bajada, "aceleracion_bajada": agarre.aceleracion_bajada, "limites_mesa": agarre.limites_mesa, "zonas_prohibidas": list(agarre.zonas_prohibidas), "margenes_por_pieza": dict(agarre.margenes_por_pieza),
         "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
         "cementerio_origen": agarre.cementerio_origen, "cementerio_paso": agarre.cementerio_paso, "cementerio_paso_fila": agarre.cementerio_paso_fila,
-        "cementerio_columnas": agarre.cementerio_columnas, "reservas": dict(agarre.reservas),
+        "cementerio_columnas": agarre.cementerio_columnas, "cementerio_por_piezas": agarre.cementerio_por_piezas, "cementerio_peones_por_fila": agarre.cementerio_peones_por_fila, "reservas": dict(agarre.reservas),
+        "cementerio_jugador_origen": agarre.cementerio_jugador_origen, "cementerio_jugador_paso": agarre.cementerio_jugador_paso, "cementerio_jugador_paso_fila": agarre.cementerio_jugador_paso_fila,
+        "desnivel_cementerio_mm": agarre.desnivel_cementerio_mm, "holgura_cementerio_mm": agarre.holgura_cementerio_mm,
     }
 
 
@@ -281,12 +283,18 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
                 for k, v in valor.items()
             ):
                 raise ErrorControl(422, "margenes_por_pieza: letras p n b r q k con valores de 0 a 60 (mm)")
-        elif clave in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila"):
-            if not (clave == "cementerio_origen" and valor is None) and not _es_par(valor):
-                raise ErrorControl(422, f"{clave} tiene que ser [x, y] en mm" + (" (o null)" if clave == "cementerio_origen" else ""))
+        elif clave in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila", "cementerio_jugador_origen", "cementerio_jugador_paso", "cementerio_jugador_paso_fila"):
+            if not (clave.endswith("_origen") and valor is None) and not _es_par(valor):
+                raise ErrorControl(422, f"{clave} tiene que ser [x, y] en mm" + (" (o null)" if clave.endswith("_origen") else ""))
         elif clave == "cementerio_columnas":
             if not isinstance(valor, int) or isinstance(valor, bool) or not 1 <= valor <= 30:
                 raise ErrorControl(422, "cementerio_columnas debe ser un entero entre 1 y 30")
+        elif clave == "cementerio_peones_por_fila":
+            if not isinstance(valor, int) or isinstance(valor, bool) or not 1 <= valor <= 8:
+                raise ErrorControl(422, "cementerio_peones_por_fila debe ser un entero entre 1 y 8")
+        elif clave == "cementerio_por_piezas":
+            if not isinstance(valor, bool):
+                raise ErrorControl(422, "cementerio_por_piezas tiene que ser verdadero o falso")
         elif clave == "reservas":
             if not isinstance(valor, dict) or any(k not in ("dama_blanca", "dama_negra") or not _es_par(v) for k, v in valor.items()):
                 raise ErrorControl(422, "reservas: dama_blanca y dama_negra, cada una [x, y] en mm")
@@ -711,8 +719,10 @@ def ir_a_posicion_inicial() -> dict:
     return _lanzar_manual("Volver a la posición inicial", lambda cliente: cliente.mover_a_angulos(tuple(cero)))
 
 
-CASILLAS_CEMENTERIO = 30
-"""Lugares del cementerio: las 30 piezas que pueden salir del tablero (32 − los 2 reyes)."""
+CASILLAS_CEMENTERIO = 72
+"""Lugares posibles del cementerio del brazo: hasta 9 filas de 8 (el bloque de peones puede ocupar de 1 a 8 filas, más la fila de piezas). Por orden de llegada solo se usan las 30 primeras (32 − los 2 reyes)."""
+CASILLAS_CEMENTERIO_JUGADOR = 72
+"""Lugares posibles del cementerio del jugador (`cementerio_jugador:K`): la misma cuadrícula que el del brazo."""
 MARGEN_PRUEBA_MM = 25.0
 """En la prueba sin pieza, la punta baja hasta esta altura sobre donde soltaría (nunca hasta el tablero)."""
 
@@ -754,7 +764,7 @@ def probar_apertura(casilla: str, tipo_pieza: str) -> dict:
 
 
 def probar_lugar(lugar: str) -> dict:
-    """Lleva la punta, SIN pieza, sobre `lugar` (`cementerio:K` con K de 0 a 29, o `reserva:dama_negra` / `reserva:dama_blanca`), baja hasta unos mm de donde soltaría
+    """Lleva la punta, SIN pieza, sobre `lugar` (`cementerio:K` con K de 0 a 71, o `reserva:dama_negra` / `reserva:dama_blanca`), baja hasta unos mm de donde soltaría
     y vuelve a subir y a la posición inicial: sirve para ver si el cementerio y las reservas están bien puestos y se alcanzan, primero en el emulador.
 
     Usa poses cartesianas (la cinemática la resuelve el controlador, o el emulador), igual que cuando mueve una pieza de verdad.
@@ -766,11 +776,18 @@ def probar_lugar(lugar: str) -> dict:
         try:
             indice = int(lugar.split(":", 1)[1])
         except ValueError as error:
-            raise ErrorControl(422, "Lugar inválido: cementerio:K con K de 0 a 29") from error
+            raise ErrorControl(422, "Lugar inválido: cementerio:K con K de 0 a 71") from error
         if not 0 <= indice < CASILLAS_CEMENTERIO:
             raise ErrorControl(422, f"El cementerio tiene {CASILLAS_CEMENTERIO} casillas (0 a {CASILLAS_CEMENTERIO - 1})")
+    elif lugar.startswith("cementerio_jugador:"):
+        try:
+            indice = int(lugar.split(":", 1)[1])
+        except ValueError as error:
+            raise ErrorControl(422, f"Lugar inválido: cementerio_jugador:K con K de 0 a {CASILLAS_CEMENTERIO_JUGADOR - 1}") from error
+        if not 0 <= indice < CASILLAS_CEMENTERIO_JUGADOR:
+            raise ErrorControl(422, f"El cementerio del jugador tiene {CASILLAS_CEMENTERIO_JUGADOR} casillas (0 a {CASILLAS_CEMENTERIO_JUGADOR - 1})")
     elif lugar not in ("reserva:dama_negra", "reserva:dama_blanca"):
-        raise ErrorControl(422, "Lugar inválido: cementerio:K, reserva:dama_negra o reserva:dama_blanca")
+        raise ErrorControl(422, "Lugar inválido: cementerio:K, cementerio_jugador:K, reserva:dama_negra o reserva:dama_blanca")
     try:
         _ = ejecutor.parametros.z_agarre
         ejecutor._xy(lugar)  # falla con un mensaje claro si no está calibrado
@@ -778,7 +795,8 @@ def probar_lugar(lugar: str) -> dict:
         raise ErrorControl(409, str(error)) from error
     seguro = ejecutor.parametros.altura_segura_mm
     cero = ejecutor.angulos_cero
-    camino = [ejecutor._pose(lugar, seguro)[:3], ejecutor._pose(lugar, MARGEN_PRUEBA_MM)[:3], ejecutor._pose(lugar, seguro)[:3]]
+    sobre = MARGEN_PRUEBA_MM - ejecutor._desnivel_de(lugar)  # en el cementerio con desnivel, 25 mm sobre donde soltaría (la mesa), no sobre el tablero
+    camino = [ejecutor._pose(lugar, seguro)[:3], ejecutor._pose(lugar, sobre)[:3], ejecutor._pose(lugar, seguro)[:3]]
     problemas = [t for a, b in zip(camino, camino[1:]) for t in zonas.problemas_de_tramo(a, b, ejecutor.parametros)] + zonas.problemas_de_punto(*camino[0], ejecutor.parametros)
     if problemas:
         raise ErrorControl(422, f"No se mueve nada: {problemas[0]}")
@@ -787,7 +805,7 @@ def probar_lugar(lugar: str) -> dict:
         if cero is not None:
             cliente.mover_a_angulos(tuple(cero))
         cliente.mover_a_pose(ejecutor._pose(lugar, seguro))
-        cliente.mover_a_pose(ejecutor._pose(lugar, MARGEN_PRUEBA_MM), lineal=True)
+        cliente.mover_a_pose(ejecutor._pose(lugar, sobre), lineal=True)
         cliente.mover_a_pose(ejecutor._pose(lugar, seguro), lineal=True)
         if cero is not None:
             cliente.mover_a_angulos(tuple(cero))
@@ -865,6 +883,124 @@ def centrar_subir() -> dict:
 
     _centrando["casilla"] = None
     return _lanzar_manual(f"Subir de {casilla}", accion)
+
+
+# --- enseñar el cementerio llevando una pieza real ---------------------------------------------------------------------------
+_ajustando: dict = {"lugar": None, "tipo": "p", "zona": None, "fila": 0, "columna": 0}
+"""La pieza que el brazo tiene en la mano entre «llevar» y «soltar»: dónde va (`lugar`, en `zona`, en la `fila` y `columna` de la cuadrícula) y de qué `tipo` es."""
+
+
+def _leer_pose(ejecutor) -> tuple[float, ...]:
+    try:
+        return ejecutor.cliente.pose()
+    except (OSError, ErrorDobot, RuntimeError) as error:
+        raise ErrorControl(503, f"No se pudo leer la posición del brazo: {error}") from error
+
+
+def _guardar_parametros_del_ejecutor(ejecutor, **cambios) -> None:
+    ejecutor.parametros = dataclasses.replace(ejecutor.parametros, **cambios)
+    if _estado.emulador is None:
+        guardar_parametros_agarre(ejecutor.parametros)
+
+
+def cementerio_llevar(zona: str, tipo_pieza: str, numero: int, origen: str) -> dict:
+    """Toma la pieza de `tipo_pieza` que hay en la casilla `origen` del tablero, la lleva al lugar que le toca en el cementerio de `zona` (`brazo` o `jugador`) y la deja SUSPENDIDA ahí, a la altura
+    en la que la soltaría, sin soltarla: se la corrige con `mover_relativo` (milímetro a milímetro) y se suelta con `cementerio_soltar`, que guarda dónde quedó. `numero` es cuál de esas piezas
+    es (peón 1 a 8, o 1 y 2 para las demás), es decir, su lugar en el cementerio ordenado. Si el cementerio de esa zona no está calibrado, parte de la propuesta automática."""
+    from backend.servicios.brazo import planificador_movimiento as planificador
+    from backend.servicios.brazo.ejecutor_movimiento import PiezaNoAgarrada
+    from backend.servicios.brazo.pinza_dh import AGARRE_SOSTIENE
+
+    ejecutor = _ejecutor()
+    if zona not in ("brazo", "jugador"):
+        raise ErrorControl(422, "zona debe ser brazo o jugador")
+    tipo = tipo_pieza.lower()
+    if tipo not in {"p", "n", "b", "r", "q"}:
+        raise ErrorControl(422, "tipo_pieza debe ser p, n, b, r o q (el rey no va al cementerio)")
+    nombre = origen.lower()
+    _casilla_o_error(nombre)
+    if ejecutor.posiciones_casillas is None or ejecutor.orientacion is None:
+        raise ErrorControl(409, "El brazo no tiene calibración del tablero (calibracion_local/brazo.json)")
+    p = ejecutor.parametros
+    sin_calibrar = (p.cementerio_jugador_origen is None) if zona == "jugador" else (p.cementerio_origen is None)
+    if sin_calibrar:  # una primera propuesta, calculada del tablero, para tener desde dónde empezar a ajustar
+        propuesta = _sugerencia_de_cementerio(ejecutor.posiciones_casillas, p)
+        prefijo = ajuste_cementerio.prefijo_de_parametros(zona)
+        ejecutor.parametros = p = dataclasses.replace(p, **{f"{prefijo}{c}": propuesta[f"{prefijo}{c}"] for c in ("origen", "paso", "paso_fila")})
+    color_del_brazo = planificador.COLOR_DEL_BRAZO
+    color = color_del_brazo if zona == "jugador" else not color_del_brazo
+    simbolo = tipo.upper() if color == chess.WHITE else tipo.lower()
+    try:
+        _ = p.z_agarre_para(tipo)
+        apertura = p.apertura_para(tipo)
+        prefijo_lugar, fila, columna = planificador.posicion_en_cementerio(simbolo, numero - 1, p.cementerio_columnas, color_del_brazo, p.cementerio_peones_por_fila)
+        lugar = f"{prefijo_lugar}{fila * max(1, p.cementerio_columnas) + columna}"
+        ejecutor._xy(lugar)
+    except ValueError as error:
+        raise ErrorControl(422, str(error)) from error
+    except RuntimeError as error:
+        raise ErrorControl(409, str(error)) from error
+    problemas = zonas.problemas_de_punto(*ejecutor._pose(nombre, 0.0, tipo)[:3], p) or zonas.problemas_de_punto(*ejecutor._pose_de_soltar(lugar, tipo)[:3], p)
+    if problemas:
+        raise ErrorControl(422, f"No se mueve nada: {problemas[0]}")
+    cero = ejecutor.angulos_cero
+    _ajustando.update(lugar=None)  # hasta que no termine de llegar no hay nada que soltar
+
+    def accion(cliente) -> None:
+        _preparar_pinza(ejecutor)
+        if cero is not None:
+            cliente.mover_a_angulos(tuple(cero))
+        seguro = ejecutor._seguro(tipo)
+        ejecutor.pinza.mover_a(apertura)
+        cliente.mover_a_pose(ejecutor._pose(nombre, seguro, tipo))
+        cliente.mover_a_pose(ejecutor._pose_de_agarre(nombre, tipo), lineal=True, **ejecutor._lento())
+        cierre = ejecutor.pinza.cerrar()
+        if cierre.agarre != AGARRE_SOSTIENE:
+            ejecutor._retirarse(nombre, apertura, tipo)
+            raise PiezaNoAgarrada(f"La pinza cerró en {nombre} y no sintió ninguna pieza: ¿está ahí?")
+        cliente.mover_a_pose(ejecutor._pose(nombre, seguro, tipo), lineal=True, **ejecutor._lento())
+        cliente.mover_a_pose(ejecutor._pose(lugar, seguro, tipo), lineal=True)
+        cliente.mover_a_pose(ejecutor._pose_de_soltar(lugar, tipo), lineal=True, **ejecutor._lento())
+        _ajustando.update(lugar=lugar, tipo=tipo, zona=zona, fila=fila, columna=columna)
+
+    return _lanzar_manual(f"Llevar la pieza de {nombre} al cementerio ({lugar}) para enseñarlo", accion)
+
+
+def cementerio_soltar(guardar: bool = True, guardar_altura: bool = False) -> dict:
+    """Suelta la pieza que el brazo lleva en la mano donde está y vuelve a la posición de descanso. Con `guardar`, la posición donde quedó se guarda como lo que defina ese lugar de la cuadrícula
+    (el origen, el paso entre casillas o el paso entre filas: ver `ajuste_cementerio.cambios_para`). Con `guardar_altura`, la altura a la que la soltó se guarda como el desnivel de la mesa.
+    Si algo no se puede guardar, responde el motivo y el brazo sigue con la pieza en la mano: se corrige y se vuelve a soltar. Con el brazo real lo guardado queda en `brazo.json`."""
+    from backend.servicios.brazo.pinza_dh import POSICION_ABIERTA
+
+    ejecutor = _ejecutor()
+    lugar, tipo, zona, fila, columna = (_ajustando[c] for c in ("lugar", "tipo", "zona", "fila", "columna"))
+    if lugar is None:
+        raise ErrorControl(409, "El brazo no tiene ninguna pieza en la mano para soltar («Tomar y llevar» primero)")
+    p = ejecutor.parametros
+    cambios: dict = {}
+    if guardar or guardar_altura:
+        pose = _leer_pose(ejecutor)
+        try:
+            if guardar:
+                origen = p.cementerio_jugador_origen if zona == "jugador" else p.cementerio_origen
+                paso = p.cementerio_jugador_paso if zona == "jugador" else p.cementerio_paso
+                cambios.update(ajuste_cementerio.cambios_para(zona, fila, columna, origen, paso, pose[0], pose[1]))
+            if guardar_altura:
+                cambios["desnivel_cementerio_mm"] = ajuste_cementerio.desnivel_para(p.z_agarre_para(tipo), p.holgura_cementerio_mm, pose[2])
+        except ValueError as error:
+            raise ErrorControl(422, str(error)) from error
+        _guardar_parametros_del_ejecutor(ejecutor, **cambios)
+    cero = ejecutor.angulos_cero
+
+    def accion(cliente) -> None:
+        _ajustando.update(lugar=None)
+        ejecutor.pinza.mover_a(min(POSICION_ABIERTA, ejecutor.parametros.apertura_para(tipo) + ejecutor.parametros.apertura_extra_soltar))
+        cliente.mover_a_pose(ejecutor._pose(lugar, ejecutor._seguro(tipo), tipo), lineal=True, **ejecutor._lento())
+        if cero is not None:
+            cliente.mover_a_angulos(tuple(cero))
+
+    respuesta = _lanzar_manual(f"Soltar la pieza en {lugar}", accion)
+    return {"lugar": lugar, "cambios": cambios, **respuesta}
 
 
 def mover_relativo(dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, velocidad_mm_s: int = 20) -> dict:
@@ -970,7 +1106,7 @@ def plan_de_movimiento(
             {"paso": "Cerrar la pinza y comprobar que agarró la pieza", "pose": None},
             {"paso": "Subir con la pieza", "pose": list(ejecutor._pose(o, seguro))},
             {"paso": f"Trasladar sobre {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, seguro))},
-            {"paso": f"Bajar a {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, p.elevacion_al_soltar_mm, paso.pieza))},
+            {"paso": f"Bajar a {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose_de_soltar(d, paso.pieza))},
             {"paso": f"Soltar la pieza (abrir la pinza a {min(1000, apertura + p.apertura_extra_soltar)})", "pose": None},
             {"paso": f"Subir de {_nombre_de_lugar(d)}", "pose": list(ejecutor._pose(d, seguro))},
         ]
@@ -1004,8 +1140,11 @@ def _sugerencia_de_cementerio(posiciones: dict[str, tuple[float, float, float]],
             origen, paso, paso_fila, reserva = a1 - 2 * por_fila, por_columna, -por_fila, a8 + 2 * por_fila
         lateral = paso if lado in ("derecha", "izquierda") else por_columna
         reservas = {"dama_negra": reserva, "dama_blanca": reserva + 1.2 * (por_fila if lado in ("derecha", "izquierda") else por_columna)}
-        puntos = [origen + c * paso + f * paso_fila for f in range(4) for c in range(8)][:30] + list(reservas.values())
+        # el cementerio del jugador, del lado contrario y con el mismo orden: su primera casilla es donde iría la reserva y las filas se alejan del tablero hacia el otro lado
+        jugador = [reserva + c * paso + f * (-paso_fila) for f in range(2) for c in range(8)]
+        puntos = [origen + c * paso + f * paso_fila for f in range(4) for c in range(8)][:32] + list(reservas.values()) + jugador
         return {"lado": lado, "cementerio_origen": redondeado(origen), "cementerio_paso": redondeado(paso), "cementerio_paso_fila": redondeado(paso_fila), "cementerio_columnas": 8,
+                "cementerio_jugador_origen": redondeado(reserva), "cementerio_jugador_paso": redondeado(paso), "cementerio_jugador_paso_fila": redondeado(-paso_fila),
                 "reservas": {k: redondeado(v) for k, v in reservas.items()}}, puntos
 
     primera = None
