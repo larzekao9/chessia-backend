@@ -395,6 +395,11 @@ def iniciar(partida_id: str, camara: str = "principal", intervalo: float = INTER
         return nueva.estado_actual()
 
 
+def en_marcha() -> bool:
+    """Si hay una partida física en marcha (es la dueña del seguimiento de la cámara mientras dura)."""
+    return _actual is not None and _actual.estado != DETENIDA
+
+
 def sesion() -> PartidaFisica:
     if _actual is None or _actual.estado == DETENIDA:
         raise SinPartidaFisica()

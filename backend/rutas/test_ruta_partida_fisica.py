@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.rutas.ruta_auth import get_current_facilitador
+from backend.rutas.ruta_auth import get_current_facilitador, get_current_user
 from backend.servicios.partida import partida_fisica, servicio_partida
 from backend.servicios.vision import seguimiento_vivo, tablero
 from backend.servicios.vision.test_seguimiento_jugadas import ESQ
@@ -50,3 +50,20 @@ def test_iniciar_pausar_resolver_y_detener(cliente) -> None:
     assert cliente.post("/partida-fisica/jugada-manual", json={"movimiento": "Qh8"}).status_code == 422  # ilegal
     assert cliente.delete("/partida-fisica").json() == {"activa": False}
     assert cliente.get("/partida-fisica/estado").json() == {"activa": False}
+
+
+def test_con_partida_fisica_el_seguimiento_a_mano_responde_409(cliente) -> None:
+    """La partida física maneja el seguimiento: el panel de seguimiento no puede reiniciarlo ni avanzarlo mientras dura."""
+    app.dependency_overrides[get_current_user] = lambda: 1
+    try:
+        partida = servicio_partida.crear_partida(nivel=5, tipo_oponente="modelo")
+        cliente.post("/partida-fisica/iniciar", json={"partida_id": partida.id})
+        for metodo, ruta, cuerpo in (("post", "iniciar", {"fen": partida.fen}), ("post", "tick", None), ("post", "posicion", {"fen": partida.fen}),
+                                     ("post", "foto-base", None), ("post", "deshacer", None), ("delete", "", None)):
+            respuesta = cliente.request(metodo.upper(), f"/vision/seguimiento/{ruta}".rstrip("/"), json=cuerpo)
+            assert respuesta.status_code == 409 and "partida física" in respuesta.json()["detail"], ruta
+        assert cliente.get("/vision/seguimiento").json()["activo"] is True  # mirar sí se puede
+        cliente.delete("/partida-fisica")
+        assert cliente.delete("/vision/seguimiento").status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

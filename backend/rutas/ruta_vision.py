@@ -27,6 +27,7 @@ from backend.esquemas.vision_esquema import (
     ReconocerTableroResponse,
 )
 from backend.rutas.ruta_auth import get_current_principal, get_current_user
+from backend.servicios.partida import partida_fisica
 from backend.servicios.vision import camara as servicio_camara
 from backend.servicios.vision.fusion import fusionar_probabilidades
 from backend.servicios.vision.camara import _fuente_por_defecto, capturar_foto_tablero, flujo_de_frames
@@ -376,9 +377,17 @@ class PosicionSeguimientoRequest(BaseModel):
     fen: str
 
 
+def _sin_partida_fisica() -> None:
+    """409 si hay una partida física en marcha: ella maneja el seguimiento (lo avanza a cada cuadro de la cámara) y tocarlo desde el panel de seguimiento
+    lo reiniciaría o le haría saltear cuadros."""
+    if partida_fisica.en_marcha():
+        raise HTTPException(status_code=409, detail="Hay una partida física en marcha y el seguimiento lo maneja ella: detenela antes de usar el seguimiento a mano.")
+
+
 @router.post("/seguimiento/iniciar")
 def iniciar_seguimiento(cuerpo: IniciarSeguimientoRequest, _usuario_id: int = Depends(get_current_user)) -> dict:
     """Empieza a seguir la partida por diferencias entre imágenes, desde `fen`, con la cámara calibrada (ver `seguimiento_jugadas`). 422 si el FEN es inválido, 409 si no está calibrada."""
+    _sin_partida_fisica()
     _validar_camara(cuerpo.camara)
     try:
         return seguimiento_vivo.iniciar(cuerpo.fen, cuerpo.camara, cuerpo.intervalo_s)
@@ -390,6 +399,7 @@ def iniciar_seguimiento(cuerpo: IniciarSeguimientoRequest, _usuario_id: int = De
 def avanzar_seguimiento(vista: bool = False, _usuario_id: int = Depends(get_current_user)) -> dict:
     """Procesa el último cuadro de la cámara (la pantalla lo pide cada segundo) y dice qué pasó: `esperando`, `moviendo`, `jugada`, `incompleta`, `invalida` o `dudosa`.
     Con `vista=true` suma `vista`: fotos base y actual, mapa de cambios y jugadas candidatas. 409 si no hay seguimiento."""
+    _sin_partida_fisica()
     try:
         return seguimiento_vivo.avanzar(con_vista=vista)
     except seguimiento_vivo.SinSeguimiento as error:
@@ -401,6 +411,7 @@ def avanzar_seguimiento(vista: bool = False, _usuario_id: int = Depends(get_curr
 @router.post("/seguimiento/posicion")
 def fijar_posicion_seguimiento(cuerpo: PosicionSeguimientoRequest, _usuario_id: int = Depends(get_current_user)) -> dict:
     """Cambia la posición conocida (p. ej. tras jugar el robot): vuelve a tomar la foto base cuando el tablero esté quieto."""
+    _sin_partida_fisica()
     try:
         return seguimiento_vivo.fijar_posicion(cuerpo.fen)
     except seguimiento_vivo.SinSeguimiento as error:
@@ -412,6 +423,7 @@ def fijar_posicion_seguimiento(cuerpo: PosicionSeguimientoRequest, _usuario_id: 
 @router.post("/seguimiento/foto-base")
 def retomar_foto_base_seguimiento(_usuario_id: int = Depends(get_current_user)) -> dict:
     """Vuelve a tomar la foto base con la posición que ya se sabe (cuando las piezas están bien y la imagen no coincide con la foto). 409 si no hay seguimiento."""
+    _sin_partida_fisica()
     try:
         return seguimiento_vivo.rebasar()
     except seguimiento_vivo.SinSeguimiento as error:
@@ -421,6 +433,7 @@ def retomar_foto_base_seguimiento(_usuario_id: int = Depends(get_current_user)) 
 @router.post("/seguimiento/deshacer")
 def deshacer_seguimiento(_usuario_id: int = Depends(get_current_user)) -> dict:
     """Quita la última jugada detectada (si se detectó mal) y vuelve a tomar la foto base. 409 si no hay seguimiento, 422 si no hay jugada para deshacer."""
+    _sin_partida_fisica()
     try:
         return seguimiento_vivo.deshacer()
     except seguimiento_vivo.SinSeguimiento as error:
@@ -447,6 +460,7 @@ def estado_seguimiento(_usuario_id: int = Depends(get_current_user)) -> dict:
 @router.delete("/seguimiento")
 def detener_seguimiento(_usuario_id: int = Depends(get_current_user)) -> dict:
     """Deja de seguir la partida."""
+    _sin_partida_fisica()
     return seguimiento_vivo.detener()
 
 
