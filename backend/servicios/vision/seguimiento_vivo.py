@@ -18,6 +18,7 @@ import numpy as np
 
 from backend.servicios.vision import seguimiento_jugadas, tablero
 from backend.servicios.vision.camara import capturar_foto_tablero, esperar_foto_nueva
+from backend.servicios.vision.camara import rendimiento as _rendimiento_camara
 
 GUARDAR_FALLOS = not os.environ.get("PYTEST_RUNNING")
 """Cuando el seguimiento da una alerta (posición inválida o jugada dudosa) se guardan las fotos y los cambios por casilla: así se puede ver después por qué falló."""
@@ -29,6 +30,10 @@ _ultimo_cuadro = 0
 _ultimo_resultado: dict | None = None
 _actual: seguimiento_jugadas.Seguimiento | None = None
 _camara = "principal"
+_intervalo_supuesto = 1.0
+"""Cada cuántos segundos se supone que llega un cuadro (con el que se calcularon los cuadros quietos de `_actual`): ver `_adaptar_al_ritmo`."""
+_ms_cuadro: float | None = None
+"""Lo que tarda, en promedio, procesar un cuadro (milisegundos)."""
 
 
 class SinSeguimiento(Exception):
@@ -50,7 +55,7 @@ def iniciar(fen: str | None = None, camara: str = "principal", intervalo_s: floa
     Raises:
         ValueError: FEN inválido o la cámara no está calibrada.
     """
-    global _actual, _camara, _ultimo_cuadro, _ultimo_resultado
+    global _actual, _camara, _ultimo_cuadro, _ultimo_resultado, _intervalo_supuesto, _ms_cuadro
     esquinas = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara))
     if esquinas is None:
         raise ValueError(f"La cámara {camara} no está calibrada: calibrala antes de seguir una partida")
@@ -59,6 +64,7 @@ def iniciar(fen: str | None = None, camara: str = "principal", intervalo_s: floa
         _actual = seguimiento_jugadas.Seguimiento(esquinas, fen or chess.STARTING_FEN, **seguimiento_jugadas.ticks_para(intervalo_s))
         _camara = camara
         _ultimo_cuadro, _ultimo_resultado = 0, None
+        _intervalo_supuesto, _ms_cuadro = max(float(intervalo_s), 0.01), None
         return _datos(_actual, camara)
 
 
@@ -74,8 +80,11 @@ def estado() -> dict:
         return _datos(_actual, _camara) if _actual is not None else {"activo": False}
 
 
-def fijar_posicion(fen: str) -> dict:
+def fijar_posicion(fen: str, rapido: bool = False) -> dict:
     """Cambia la posición conocida (por ejemplo, después de que el robot jugó) y vuelve a tomar la foto base cuando el tablero esté quieto.
+
+    Con `rapido` (el brazo acaba de terminar y no hay ninguna mano en el tablero) la foto base se toma en unos pocos cuadros en vez de esperar un segundo quieto:
+    ver `Seguimiento.fijar_posicion`.
 
     Raises:
         SinSeguimiento: no hay seguimiento. ValueError: FEN inválido.
@@ -83,7 +92,7 @@ def fijar_posicion(fen: str) -> dict:
     with _cerrojo:
         if _actual is None:
             raise SinSeguimiento()
-        _actual.fijar_posicion(fen)
+        _actual.fijar_posicion(fen, rapido)
         return _datos(_actual, _camara)
 
 
@@ -125,6 +134,28 @@ def vista() -> dict:
         return _actual.vista()
 
 
+def rendimiento() -> dict:
+    """Cómo está trabajando el seguimiento: los cuadros por segundo reales de la cámara (`fps_camara`), su formato (`MJPG` es lo que da 30) y lo que tarda procesar un cuadro
+    (`ms_cuadro`). Si la cámara entrega pocos cuadros por segundo, ese es el límite de qué tan rápido se reconoce una jugada, por rápido que sea el cálculo."""
+    info = _rendimiento_camara(_camara) or {}
+    return {"fps_camara": info.get("fps"), "formato": info.get("formato"), "ms_cuadro": None if _ms_cuadro is None else round(_ms_cuadro, 1)}
+
+
+def _adaptar_al_ritmo(seguimiento: seguimiento_jugadas.Seguimiento) -> None:
+    """Ajusta los cuadros quietos que hacen falta al ritmo REAL de la cámara: `ticks_para` los calculó para el ritmo que se supuso al iniciar (30 cuadros por segundo) y,
+    si la cámara entrega 10, esos mismos cuadros serían tres veces más tiempo. Solo cambia si la diferencia es de más de un cuarto (para no oscilar con cada medición)."""
+    global _intervalo_supuesto
+    fps = (_rendimiento_camara(_camara) or {}).get("fps")
+    if not fps or fps < 2:
+        return
+    real = 1.0 / fps
+    if abs(real - _intervalo_supuesto) / _intervalo_supuesto < 0.25:
+        return
+    for clave, valor in seguimiento_jugadas.ticks_para(real).items():
+        setattr(seguimiento, clave, valor)
+    _intervalo_supuesto = real
+
+
 def _guardar_fallo(seguimiento: seguimiento_jugadas.Seguimiento, resultado: dict) -> None:
     """Guarda (una vez por alerta) la foto base junto a la de ahora y un JSON con los cambios por casilla. Deja solo las últimas `FALLOS_MAXIMOS`."""
     global _fallo_guardado
@@ -162,7 +193,7 @@ def avanzar(con_vista: bool = False, nuevo: bool = False) -> dict:
     Raises:
         SinSeguimiento: no hay seguimiento. RuntimeError: la cámara no está disponible.
     """
-    global _ultimo_cuadro, _ultimo_resultado
+    global _ultimo_cuadro, _ultimo_resultado, _ms_cuadro
     with _cerrojo:
         if _actual is None:
             raise SinSeguimiento()
@@ -181,7 +212,12 @@ def avanzar(con_vista: bool = False, nuevo: bool = False) -> dict:
     with _cerrojo:
         if _actual is not seguimiento:  # se detuvo o reinició mientras se tomaba el cuadro
             raise SinSeguimiento()
+        if nuevo:
+            _adaptar_al_ritmo(seguimiento)
+        inicio = time.perf_counter()
         resultado = {"activo": True, "camara": camara, **seguimiento.actualizar(imagen)}
+        milisegundos = (time.perf_counter() - inicio) * 1000
+        _ms_cuadro = milisegundos if _ms_cuadro is None else 0.9 * _ms_cuadro + 0.1 * milisegundos
         resultado["alerta"] = seguimiento.ultima_alerta
         if GUARDAR_FALLOS:
             _guardar_fallo(seguimiento, resultado)

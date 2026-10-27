@@ -58,6 +58,10 @@ SEGUNDOS_QUIETO = 0.15
 """Cuánto tiempo tiene que estar el tablero quieto para dar por hecha una jugada (con `ticks_para`, según el ritmo al que se mira)."""
 SEGUNDOS_BASE = 1.0
 """Cuánto tiempo tiene que estar el tablero quieto para tomar la FOTO BASE (más que para dar una jugada: si se toma con la mano encima, todo lo que venga después se compara contra una mano)."""
+TICKS_BASE_RAPIDA = 3
+"""Cuadros quietos seguidos para tomar la FOTO BASE justo después de que el brazo terminó y volvió a su posición de descanso (`fijar_posicion(rapido=True)`): nadie tiene la
+mano sobre el tablero, así que no hace falta esperar un segundo entero. Son unos 0,1 s a 30 cuadros por segundo; con menos de 3 cuadros, un cuadro tomado con el brazo todavía
+en movimiento podría quedar de base."""
 SEGUNDOS_BASE_SUCIA = 4.0
 """Si un cambio que ninguna jugada explica (y que toca 5 casillas o más) dura tanto, la foto base probablemente tiene la mano encima: se vuelve a tomar."""
 SEGUNDOS_AJUSTE = 3.0
@@ -297,6 +301,7 @@ class Seguimiento:
     ticks_base: int = TICKS_BASE
     ticks_sucia: int = TICKS_SUCIA
     ticks_ajuste: int = TICKS_AJUSTE
+    ticks_base_rapida: int = TICKS_BASE_RAPIDA
     cambio_minimo: float = CAMBIO_MINIMO
     base: np.ndarray | None = field(default=None, repr=False)
     base_img: np.ndarray | None = field(default=None, repr=False)
@@ -316,13 +321,19 @@ class Seguimiento:
     analisis: dict | None = field(default=None, repr=False)
     congelado: bool = False
     """Tras aceptar una jugada, el análisis se queda con ella (antes y después) hasta que algo se mueva otra vez."""
+    base_rapida: bool = False
+    """La próxima foto base se toma con `ticks_base_rapida` cuadros quietos en vez de `ticks_base` (ver `fijar_posicion`)."""
 
-    def fijar_posicion(self, fen: str) -> None:
-        """Cambia la posición conocida (por ejemplo, tras mover el robot) y vuelve a tomar la foto base cuando el tablero esté quieto."""
+    def fijar_posicion(self, fen: str, rapido: bool = False) -> None:
+        """Cambia la posición conocida (por ejemplo, tras mover el robot) y vuelve a tomar la foto base cuando el tablero esté quieto.
+
+        Con `rapido` (justo después de que el brazo terminó y volvió a su posición de descanso, con el tablero sin ninguna mano encima) la foto base se toma enseguida,
+        con `ticks_base_rapida` cuadros quietos en vez de esperar `ticks_base`: así la jugada que haga la persona a continuación se reconoce sin demora.
+        """
         chess.Board(fen)  # valida
         self.fen = fen
         self.historial = []
-        self._reiniciar_base()
+        self._reiniciar_base(rapido)
 
     def rebasar(self) -> None:
         """Vuelve a tomar la foto base con la posición que ya se sabe: para cuando las piezas quedaron bien pero algo (una pieza movida de sitio, la luz) hace
@@ -343,8 +354,11 @@ class Seguimiento:
         self._reiniciar_base()
         return san
 
-    def _reiniciar_base(self) -> None:
+    def _reiniciar_base(self, rapido: bool = False) -> None:
         self.base = self.base_img = None
+        self.base_rapida = rapido
+        if rapido:
+            self.anterior = None  # el cuadro anterior es de ANTES de que el brazo moviera la pieza: compararlo contra el de ahora daría «movimiento» y haría esperar de más
         self.estables = self.parciales = self.confirmaciones = self.sin_explicar = self.ajuste_restante = 0
         self.pendiente = None
         self.estado = "tomando_base"
@@ -370,9 +384,9 @@ class Seguimiento:
             return self._respuesta("moviendo", "Hay movimiento en el tablero: esperando que quede quieto…", entre_cuadros)
         self.estables += 1
         if self.base is None:
-            if self.estables < self.ticks_base:
+            if self.estables < (self.ticks_base_rapida if self.base_rapida else self.ticks_base):
                 return self._respuesta("tomando_base", "Esperando que el tablero esté quieto para tomar la foto base…", frozenset(), vista=False)
-            self.base, self.base_img = lab, enderezada
+            self.base, self.base_img, self.base_rapida = lab, enderezada, False
             self._guardar_analisis(enderezada, None, frozenset(), frozenset())
             return self._respuesta("esperando", "Foto base tomada. Esperando la próxima jugada.", frozenset())
         if self.estables < self.ticks_estable:

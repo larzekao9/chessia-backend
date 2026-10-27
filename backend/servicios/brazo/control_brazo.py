@@ -227,7 +227,7 @@ def parar() -> dict:
 # --- parámetros -----------------------------------------------------------------------------------------------------------
 _RANGOS = {
     "velocidad_global": (1, 100), "aceleracion": (1, 100), "velocidad": (1, 100), "fuerza": (20, 100), "velocidad_pinza": (1, 100),
-    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 30), "corrimiento_x_mm": (-30, 30), "corrimiento_y_mm": (-30, 30), "altura_borde_mm": (0, 50), "holgura_traslado_mm": (0, 60), "elevacion_al_soltar_mm": (0, 30), "velocidad_bajada": (1, 100), "aceleracion_bajada": (1, 100), "giro_diagonal_grados": (-180, 180),
+    "apertura_aproximacion": (0, 1000), "apertura_extra_soltar": (0, 1000), "largo_pinza_mm": (100, 400), "altura_segura_mm": (20, 200), "margen_agarre_mm": (0, 60), "corrimiento_x_mm": (-30, 30), "corrimiento_y_mm": (-30, 30), "altura_borde_mm": (0, 50), "holgura_traslado_mm": (0, 60), "elevacion_al_soltar_mm": (0, 30), "velocidad_bajada": (1, 100), "aceleracion_bajada": (1, 100), "giro_diagonal_grados": (-180, 180),
 }
 
 
@@ -277,10 +277,10 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
                 raise ErrorControl(422, "alturas_piezas_mm: letras p n b r q k con valores de 0 a 200 (mm)")
         elif clave == "margenes_por_pieza":
             if not isinstance(valor, dict) or any(
-                k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 30
+                k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not 0 <= v <= 60
                 for k, v in valor.items()
             ):
-                raise ErrorControl(422, "margenes_por_pieza: letras p n b r q k con valores de 0 a 30 (mm)")
+                raise ErrorControl(422, "margenes_por_pieza: letras p n b r q k con valores de 0 a 60 (mm)")
         elif clave in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila"):
             if not (clave == "cementerio_origen" and valor is None) and not _es_par(valor):
                 raise ErrorControl(422, f"{clave} tiene que ser [x, y] en mm" + (" (o null)" if clave == "cementerio_origen" else ""))

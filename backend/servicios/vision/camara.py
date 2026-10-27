@@ -31,6 +31,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 # Antes de importar OpenCV (ver `backend/main.py`): sin esto, algunas webcams USB tardan 15 a 20 s en abrir con Media Foundation.
@@ -234,6 +235,23 @@ def esperar_foto_nueva(despues_de: int = 0, camara: str = "principal", timeout: 
 SEGUNDOS_INACTIVA = 15.0
 """Sin pedidos de fotos durante este tiempo, la cámara se suelta (otra app puede usarla) y se reabre al siguiente pedido."""
 
+CUADROS_PARA_MEDIR_FPS = 30
+"""Cuántos de los últimos cuadros se usan para medir los cuadros por segundo reales de la cámara (y en cuál se deja el aviso en el registro)."""
+
+
+def _usar_mjpg() -> bool:
+    """Si se pide MJPG a las cámaras locales: sí, salvo `CAMARA_MJPG=0` (por si alguna cámara se porta peor con él)."""
+    return os.environ.get("CAMARA_MJPG", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def rendimiento(camara: str = "principal") -> dict | None:
+    """Cómo está trabajando la cámara ahora: `{fps, formato, alto, ancho}`; `None` si no hay una captura en marcha de esa cámara."""
+    captura = _capturas.get(camara)
+    if captura is None or not captura.vivo:
+        return None
+    alto, ancho = captura.forma or (None, None)
+    return {"fps": captura.fps, "formato": captura.formato, "alto": alto, "ancho": ancho}
+
 SEGUNDOS_MAXIMOS_PARA_ABRIR = 15.0
 """Lo más que se espera a que una cámara abra. Una webcam USB trabada (por ejemplo, tras cortarle el programa a la fuerza) puede quedarse
 abriendo sin terminar nunca, y como se abre con el cerrojo de la cámara tomado, dejaba colgado TODO lo que usa cámara: la vista en vivo,
@@ -286,16 +304,63 @@ class _CapturaContinua:
         self._listo = threading.Event()
         self._condicion = threading.Condition()
         self._numero = 0
+        self._marcas: deque[float] = deque(maxlen=CUADROS_PARA_MEDIR_FPS)
+        self.formato = "predeterminado"
+        """`MJPG` si la cámara quedó entregando JPEG comprimidos (lo que permite 30 cuadros por segundo a 1280x720 por USB), `predeterminado` si no."""
+        self.forma: tuple[int, int] | None = None
+        """(alto, ancho) de los cuadros que entrega."""
         self._camara = _abrir_con_limite(fuente)
         self.ultimo_cuadro_en = time.monotonic()
         if not self._camara.isOpened():
             self._camara.release()
             raise RuntimeError(f"No se pudo abrir la cámara/fuente {fuente!r}")
+        self._configurar()
+        self._hilo = threading.Thread(target=self._leer, daemon=True, name=f"captura-continua-{camara}")
+        self._hilo.start()
+
+    def _pedir_resolucion(self) -> None:
         self._camara.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self._camara.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self._camara.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self._hilo = threading.Thread(target=self._leer, daemon=True, name=f"captura-continua-{camara}")
-        self._hilo.start()
+
+    def _configurar(self) -> None:
+        """Pide 1280x720 y, en una cámara local, MJPG a 30 cuadros por segundo.
+
+        Muchas webcams USB, sin pedírselo, entregan 1280x720 SIN comprimir (YUY2), y por USB 2 eso alcanza apenas 5 a 10 cuadros por segundo: el seguimiento de la
+        partida ve la jugada con ese atraso por más rápido que sea el cálculo. Con MJPG llegan a 30. Se comprueba que la cámara siga entregando el mismo tamaño de
+        cuadro que antes y, si no (o si no entrega nada), se la reabre con la configuración de antes: nunca queda peor. `CAMARA_MJPG=0` lo desactiva.
+        """
+        self._pedir_resolucion()
+        if not isinstance(self.fuente, int) or not _usar_mjpg():
+            return
+        exito, antes = self._camara.read()
+        if not exito or antes is None:
+            return
+        self._camara.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self._pedir_resolucion()
+        self._camara.set(cv2.CAP_PROP_FPS, 30)
+        exito, despues = self._camara.read()
+        if exito and despues is not None and despues.shape == antes.shape:
+            self.formato = "MJPG"
+            return
+        logger.warning("Cámara %s: con MJPG no entregó el mismo tamaño de cuadro: se vuelve a la configuración de antes", self.camara_id)
+        self._camara.release()
+        self._camara = _abrir_con_limite(self.fuente)
+        if not self._camara.isOpened():
+            self._camara.release()
+            raise RuntimeError(f"No se pudo volver a abrir la cámara/fuente {self.fuente!r}")
+        self._pedir_resolucion()
+
+    @property
+    def fps(self) -> float | None:
+        """Cuadros por segundo que está entregando la cámara AHORA (medidos sobre los últimos cuadros); `0.0` si dejó de entregar, `None` si todavía no hay con qué medir."""
+        with self._condicion:
+            marcas = list(self._marcas)
+        if len(marcas) < 5:
+            return None
+        if time.monotonic() - marcas[-1] > 1.0:
+            return 0.0
+        return round((len(marcas) - 1) / max(marcas[-1] - marcas[0], 1e-6), 1)
 
     def detener(self) -> None:
         """Suelta la cámara ya (no espera a la inactividad); sirve para abrir otra fuente."""
@@ -326,7 +391,12 @@ class _CapturaContinua:
                 with self._condicion:
                     self._frame = imagen
                     self._numero += 1
+                    self._marcas.append(self.ultimo_cuadro_en)
                     self._condicion.notify_all()
+                if leidos == 1:
+                    self.forma = tuple(imagen.shape[:2])
+                if leidos == CUADROS_PARA_MEDIR_FPS:
+                    logger.info("Cámara %s: %dx%d, formato %s, %s cuadros por segundo", self.camara_id, imagen.shape[1], imagen.shape[0], self.formato, self.fps)
                 # Una webcam necesita unos frames para ajustar exposición y balance de blancos: los primeros salen oscuros.
                 if leidos >= (12 if isinstance(self.fuente, int) else 1):
                     self._listo.set()

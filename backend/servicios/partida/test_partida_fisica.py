@@ -22,7 +22,7 @@ def mundo(monkeypatch):
         mundo.cuadros += 1
         return _frame(mundo.fisico, mano=mundo.mano, semilla=mundo.cuadros)
 
-    def ocupadas(fotos):
+    def ocupadas(fotos, esperadas=None):
         presentes = chess.Board(mundo.fisico).piece_map()
         vistas = np.array([chess.parse_square(n) in presentes for n in rv.NOMBRES])
         if mundo.ocupacion_torcida:
@@ -256,3 +256,39 @@ def test_el_estado_puede_traer_la_vista_de_la_comparacion(mundo) -> None:
     assert datos["vista"]["disponible"] and datos["vista"]["base"].startswith("data:image/jpeg")
     assert "vista" not in pf.estado()
     assert sesion.estado == pf.ESPERANDO_HUMANO
+
+
+def test_tras_la_jugada_del_brazo_la_foto_base_se_toma_enseguida_y_no_hace_esperar_a_la_persona(mundo, monkeypatch) -> None:
+    """Cuando el brazo termina y vuelve a su descanso no hay ninguna mano en el tablero: la verificación toma la foto base en unos pocos cuadros (no un segundo
+    de quietud) para que la jugada siguiente de la persona se reconozca sin demora."""
+    rapidos, usados = [], []
+    fijar = seguimiento_vivo.fijar_posicion
+    verificar = pf.PartidaFisica._verificar
+
+    def fijar_registrando(fen, rapido=False):
+        rapidos.append(rapido)
+        return fijar(fen, rapido)
+
+    def verificar_midiendo(self):
+        antes = mundo.cuadros
+        verificar(self)
+        usados.append(mundo.cuadros - antes)
+
+    monkeypatch.setattr(seguimiento_vivo, "fijar_posicion", fijar_registrando)
+    monkeypatch.setattr(pf.PartidaFisica, "_verificar", verificar_midiendo)
+    sesion = _empezar(mundo)
+    _mover_a_mano(mundo, sesion, "e2e4")
+    assert rapidos == [True] and sesion.estado == pf.ESPERANDO_HUMANO
+    assert len(usados) == 1 and usados[0] <= 6  # 3 cuadros para la base y uno más para la ocupación
+    _mover_a_mano(mundo, sesion, "g1f3")  # y la jugada siguiente se reconoce con esa base
+    assert sesion.estado_actual()["jugadas"] == ["e4", "e5", "Nf3", "Nc6"]
+
+
+def test_el_estado_de_la_partida_fisica_informa_el_rendimiento_y_si_falta_la_foto_del_tablero_vacio(mundo, monkeypatch) -> None:
+    """Para ver de un vistazo por qué se reconoce lento (cuadros por segundo de la cámara) y por qué no se comprueba la ocupación (falta la foto del tablero vacío)."""
+    sesion = _empezar(mundo)
+    monkeypatch.setattr(pf.referencia_vacia, "cargar_referencia", lambda camara="principal", perfil=None: None)
+    datos = sesion.estado_actual()
+    assert datos["referencia_vacia"] is False and set(datos["rendimiento"]) == {"fps_camara", "formato", "ms_cuadro"}
+    monkeypatch.setattr(pf.referencia_vacia, "cargar_referencia", lambda camara="principal", perfil=None: np.zeros((8, 8, 3), np.uint8))
+    assert sesion.estado_actual()["referencia_vacia"] is True

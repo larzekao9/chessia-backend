@@ -107,3 +107,28 @@ def test_avanzar_con_cuadros_nuevos_no_repite_ni_reprocesa_un_cuadro(monkeypatch
     segundo = seguimiento_vivo.avanzar(nuevo=True)
     assert "repetido" not in primero and sin_cuadro["repetido"] is True and sin_cuadro["estado"] == primero["estado"] and "repetido" not in segundo
     assert pedidos == [0, 1, 1]  # cada pedido es «después del último cuadro ya procesado»
+
+
+def test_los_cuadros_quietos_se_ajustan_al_ritmo_real_de_la_camara(monkeypatch, cliente) -> None:
+    """`ticks_para` supone 30 cuadros por segundo; si la cámara entrega 10, esos cuadros serían tres veces más tiempo: se recalculan con el ritmo medido."""
+    inicio = chess.STARTING_FEN
+    cuadros = iter(range(1, 100))
+    monkeypatch.setattr(seguimiento_vivo, "esperar_foto_nueva", lambda despues_de, camara="principal", timeout=0.25: (next(cuadros), _frame(inicio, semilla=despues_de + 1)))
+    ritmo = {"fps": 30.0}
+    monkeypatch.setattr(seguimiento_vivo, "_rendimiento_camara", lambda camara="principal": {"fps": ritmo["fps"], "formato": "MJPG"})
+    seguimiento_vivo.iniciar(intervalo_s=1 / 30)  # un cuadro de la cámara (la ruta no admite menos de 0,05 s: la pantalla mira a 4 por segundo)
+    seguimiento_vivo.avanzar(nuevo=True)
+    assert seguimiento_vivo._actual.ticks_estable == 4 and seguimiento_vivo._actual.ticks_base == 30  # 30 cuadros por segundo: los de siempre
+    ritmo["fps"] = 28.0
+    seguimiento_vivo.avanzar(nuevo=True)
+    assert seguimiento_vivo._actual.ticks_base == 30  # una diferencia chica no los mueve
+    ritmo["fps"] = 10.0
+    seguimiento_vivo.avanzar(nuevo=True)
+    assert seguimiento_vivo._actual.ticks_estable == 2 and seguimiento_vivo._actual.ticks_base == 10  # a 10 cuadros por segundo: 0,2 s quieto y 1 s para la foto base
+    info = seguimiento_vivo.rendimiento()
+    assert info["fps_camara"] == 10.0 and info["formato"] == "MJPG" and info["ms_cuadro"] is not None and info["ms_cuadro"] >= 0
+
+
+def test_rendimiento_sin_seguimiento_ni_camara_no_falla(monkeypatch) -> None:
+    monkeypatch.setattr(seguimiento_vivo, "_rendimiento_camara", lambda camara="principal": None)
+    assert seguimiento_vivo.rendimiento()["fps_camara"] is None

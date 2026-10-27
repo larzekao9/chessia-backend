@@ -353,3 +353,34 @@ def test_lo_que_cambia_en_las_casillas_de_la_jugada_recien_hecha_se_absorbe() ->
     ajustada = chess.Board(tras); ajustada.remove_piece_at(chess.E4)  # la pieza se levanta un momento para acomodarla
     res = _correr(seg, [_frame(ajustada.fen(), semilla=30 + i) for i in range(3)])
     assert all(r["estado"] != "invalida" for r in res) and seg.jugadas == ["e4"]
+
+
+def test_la_foto_base_rapida_se_toma_en_tres_cuadros_aunque_el_anterior_sea_de_antes_del_brazo() -> None:
+    """Justo después de que el brazo terminó no hay ninguna mano en el tablero: la foto base se toma en 3 cuadros (~0,1 s), sin el segundo entero de quietud, y el cuadro
+    de antes de que el brazo moviera la pieza no se compara con el de ahora (daría «movimiento» y haría esperar de más)."""
+    inicio, tras_e4 = chess.STARTING_FEN, _posicion_tras("e2e4")
+    seg = sj.Seguimiento(ESQ, **sj.ticks_para(1 / 30))
+    _correr(seg, [_frame(inicio, semilla=s) for s in range(1, 40)])  # foto base inicial: 1 s quieto
+    assert seg.base is not None
+    seg.fijar_posicion(tras_e4, rapido=True)  # el robot jugó e2e4
+    res = _correr(seg, [_frame(tras_e4, semilla=100 + s) for s in range(3)])
+    assert [r["estado"] for r in res] == ["tomando_base", "tomando_base", "esperando"] and seg.base is not None and seg.fen == tras_e4
+    assert seg.base_rapida is False  # la próxima foto base ya vuelve a ser la prudente
+
+
+def test_sin_rapido_la_foto_base_sigue_esperando_el_segundo_de_quietud() -> None:
+    inicio, tras_e4 = chess.STARTING_FEN, _posicion_tras("e2e4")
+    seg = sj.Seguimiento(ESQ, **sj.ticks_para(1 / 30))
+    _correr(seg, [_frame(inicio, semilla=s) for s in range(1, 40)])
+    seg.fijar_posicion(tras_e4)
+    _correr(seg, [_frame(tras_e4, semilla=100 + s) for s in range(10)])
+    assert seg.base is None  # con 10 cuadros quietos todavía no alcanza: hacen falta 30
+
+
+def test_una_jugada_de_la_persona_justo_despues_de_la_foto_base_rapida_se_reconoce() -> None:
+    inicio, tras_e4, tras_e5 = chess.STARTING_FEN, _posicion_tras("e2e4"), _posicion_tras("e2e4", "e7e5")
+    seg = sj.Seguimiento(ESQ, tras_e4, **sj.ticks_para(1 / 30))
+    seg.fijar_posicion(tras_e4, rapido=True)
+    _correr(seg, [_frame(tras_e4, semilla=100 + s) for s in range(3)])  # base lista en 3 cuadros
+    res = _correr(seg, [_frame(tras_e5, mano=True, semilla=200)] + [_frame(tras_e5, semilla=201 + i) for i in range(8)])
+    assert seg.jugadas == ["e5"] and any(r["estado"] == "jugada" for r in res)

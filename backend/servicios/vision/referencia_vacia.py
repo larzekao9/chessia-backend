@@ -29,6 +29,10 @@ CENTRO = (20, 80)
 MINIMO_PIEZA = 15.0
 """Cambio mínimo (sobre el fondo del tablero) para decir que hay una pieza. Con fotos reales: el tablero vacío cambia como mucho 3,5 en la
 cámara de arriba y 12 en la diagonal; una pieza, 24 o más."""
+MINIMO_PIEZA_ESPERADA = 6.0
+"""Cambio mínimo, en una casilla donde la posición dice que HAY una pieza, para darla por ocupada. Una pieza clara sobre una casilla clara (o una oscura sobre una oscura) casi no se
+distingue del tablero vacío: cambia 6 a 14, bajo `MINIMO_PIEZA`, y se la daba por vacía (falsa alarma). Una casilla realmente vacía no pasa de 3 a 4 de ruido, así que 6 todavía
+separa las dos cosas cuando se sabe qué se espera."""
 RELACION_MINIMA = 2.0
 """Cuántas veces más tiene que cambiar la casilla ganadora que la segunda para no ser "ambigua" (hay otra pieza o una mano)."""
 NOMBRES = [f"{c}{f}" for f in range(8, 0, -1) for c in "abcdefgh"]
@@ -193,14 +197,16 @@ def detectar_casilla(fotos: dict[str, np.ndarray]) -> tuple[str | None, str, flo
     return casilla, estado, confianza, {camara: decision[0] or "" for camara, decision in decisiones.items()}
 
 
-def ocupadas(fotos: dict[str, np.ndarray]) -> tuple[np.ndarray, str] | None:
+def ocupadas(fotos: dict[str, np.ndarray], esperadas: np.ndarray | None = None) -> tuple[np.ndarray, str] | None:
     """Qué casillas tienen pieza (`(64,)` bool, orden `NOMBRES`) según la cámara menos inclinada de `fotos`, con cualquier cantidad de piezas.
 
-    Una casilla está ocupada si cambió `MINIMO_PIEZA` o más respecto del tablero vacío. Devuelve `(ocupadas, camara que decidió)`, o `None` si
-    ninguna cámara tiene referencia.
+    Una casilla está ocupada si cambió `MINIMO_PIEZA` o más respecto del tablero vacío. Si se sabe qué casillas DEBERÍAN estar ocupadas (`esperadas`, `(64,)` bool: se comprueba una
+    posición conocida), en esas alcanza con `MINIMO_PIEZA_ESPERADA`: así una pieza clara sobre casilla clara no parece una casilla vacía. Devuelve `(ocupadas, camara que decidió)`,
+    o `None` si ninguna cámara tiene referencia.
     """
     lecturas = _cambios_por_camara(fotos)
     if not lecturas:
         return None
     decisora = min(lecturas, key=lambda camara: lecturas[camara][1])
-    return lecturas[decisora][0] >= MINIMO_PIEZA, decisora
+    minimo = MINIMO_PIEZA if esperadas is None else np.where(np.asarray(esperadas, dtype=bool), MINIMO_PIEZA_ESPERADA, MINIMO_PIEZA)
+    return lecturas[decisora][0] >= minimo, decisora

@@ -302,3 +302,101 @@ def test_una_camara_que_deja_de_entregar_cuadros_se_reinicia(monkeypatch) -> Non
     with pytest.raises(RuntimeError, match="reiniciando"):
         camara.esperar_foto_nueva(7)
     assert colgada.detenida and "principal" not in camara._capturas
+
+
+class _CamaraFalsa:
+    """Una `cv2.VideoCapture` de mentira: guarda lo que se le pide y entrega cuadros de `forma`. Si se le pide MJPG pasa a entregar `forma_con_mjpg`."""
+
+    def __init__(self, forma=(720, 1280, 3), forma_con_mjpg=None) -> None:
+        self.forma, self.forma_con_mjpg = forma, forma_con_mjpg
+        self.pedidos: list[tuple[int, float]] = []
+        self.liberada = False
+
+    def isOpened(self) -> bool:
+        return True
+
+    def set(self, propiedad, valor) -> bool:
+        self.pedidos.append((propiedad, valor))
+        if propiedad == cv2.CAP_PROP_FOURCC and self.forma_con_mjpg is not None:
+            self.forma = self.forma_con_mjpg
+        return True
+
+    def read(self):
+        import time
+
+        import numpy as np
+
+        time.sleep(0.002)
+        return True, np.zeros(self.forma, np.uint8)
+
+    def release(self) -> None:
+        self.liberada = True
+
+
+def _captura_con(monkeypatch, camaras: list) -> object:
+    """Una `_CapturaContinua` armada con las cámaras falsas dadas (una por cada vez que se abre)."""
+    from backend.servicios.vision import camara
+
+    pendientes = list(camaras)
+    monkeypatch.setattr(camara, "_abrir_con_limite", lambda fuente: pendientes.pop(0))
+    return camara._CapturaContinua(0, "principal")
+
+
+def test_la_camara_local_se_configura_en_mjpg_a_30_cuadros_por_segundo(monkeypatch) -> None:
+    """MJPG es lo que permite 30 cuadros por segundo a 1280x720 por USB: se pide, con el tamaño de siempre, y se queda si la cámara lo acepta."""
+    monkeypatch.delenv("CAMARA_MJPG", raising=False)
+    falsa = _CamaraFalsa()
+    captura = _captura_con(monkeypatch, [falsa])
+    try:
+        assert captura.formato == "MJPG"
+        assert (cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG")) in falsa.pedidos
+        assert (cv2.CAP_PROP_FPS, 30) in falsa.pedidos
+        assert (cv2.CAP_PROP_FRAME_WIDTH, 1280) in falsa.pedidos and (cv2.CAP_PROP_FRAME_HEIGHT, 720) in falsa.pedidos
+        assert not falsa.liberada
+    finally:
+        captura.detener()
+
+
+def test_si_con_mjpg_cambia_el_tamano_del_cuadro_se_vuelve_a_la_configuracion_de_antes(monkeypatch) -> None:
+    """Las esquinas del tablero están marcadas sobre 1280x720: una cámara que con MJPG entrega otro tamaño se reabre sin MJPG (nunca queda peor)."""
+    monkeypatch.delenv("CAMARA_MJPG", raising=False)
+    rara, normal = _CamaraFalsa(forma_con_mjpg=(480, 640, 3)), _CamaraFalsa()
+    captura = _captura_con(monkeypatch, [rara, normal])
+    try:
+        assert captura.formato == "predeterminado"
+        assert rara.liberada and not normal.liberada
+        assert not any(p == cv2.CAP_PROP_FOURCC for p, _ in normal.pedidos)
+        assert (cv2.CAP_PROP_FRAME_WIDTH, 1280) in normal.pedidos
+    finally:
+        captura.detener()
+
+
+def test_camara_mjpg_cero_no_toca_el_formato(monkeypatch) -> None:
+    monkeypatch.setenv("CAMARA_MJPG", "0")
+    falsa = _CamaraFalsa()
+    captura = _captura_con(monkeypatch, [falsa])
+    try:
+        assert captura.formato == "predeterminado"
+        assert not any(p in (cv2.CAP_PROP_FOURCC, cv2.CAP_PROP_FPS) for p, _ in falsa.pedidos)
+    finally:
+        captura.detener()
+
+
+def test_los_cuadros_por_segundo_se_miden_sobre_los_ultimos_cuadros_recibidos(monkeypatch) -> None:
+    import time
+
+    monkeypatch.setenv("CAMARA_MJPG", "0")
+    captura = _captura_con(monkeypatch, [_CamaraFalsa()])
+    try:
+        deadline = time.monotonic() + 3.0
+        while captura.fps is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        medido = captura.fps
+        assert medido is not None and 20 <= medido <= 600  # la falsa entrega uno cada ~2 ms
+        from backend.servicios.vision import camara
+
+        monkeypatch.setitem(camara._capturas, "principal", captura)
+        info = camara.rendimiento("principal")
+        assert info["formato"] == "predeterminado" and info["fps"] > 0 and info["ancho"] == 1280 and info["alto"] == 720
+    finally:
+        captura.detener()

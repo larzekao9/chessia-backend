@@ -25,6 +25,7 @@ from collections import deque
 from datetime import datetime, timezone
 
 import chess
+import numpy as np
 
 from backend.servicios.brazo import servicio_brazo
 from backend.servicios.partida import servicio_partida
@@ -48,8 +49,7 @@ FALLOS_DE_CAMARA_MAXIMOS = 5
 PAUSA_TRAS_FALLO_S = 0.2
 """Pausa tras un fallo de la cámara (mientras se reinicia): sin ella el bucle, que no espera entre cuadros, giraría sin parar."""
 CUADROS_PARA_BASE = 12
-"""Segundos que se espera a que el tablero quede quieto para tomar la foto base tras la jugada del brazo."""
-"""Cuadros que se espera a que el tablero quede quieto para tomar la foto base tras la jugada del brazo."""
+"""Segundos que se espera, como máximo, a que el tablero quede quieto para tomar la foto base tras la jugada del brazo (con un intervalo real; en las pruebas, cuadros)."""
 DIFERENCIAS_TOLERADAS = 1
 """Casillas ocupadas distintas entre la cámara y la posición que se avisan pero no frenan la partida; con más, incidente."""
 
@@ -216,13 +216,20 @@ class PartidaFisica:
         self._fijar(VERIFICANDO, "Comprobando que el tablero quedó como debe…")
         fen = self._partida().fen
         try:
-            seguimiento_vivo.fijar_posicion(fen)
-            quieto = False
-            for _ in range(self.cuadros_para_base):
-                if seguimiento_vivo.avanzar()["estado"] == "esperando":
+            # El brazo ya terminó y volvió a su descanso: no hay ninguna mano en el tablero, así que la foto base se toma enseguida (unos 0,1 s) y la próxima jugada de la
+            # persona se reconoce sin demora, en vez de esperar un segundo con el tablero quieto.
+            seguimiento_vivo.fijar_posicion(fen, rapido=True)
+            quieto, limite, intentos = False, time.monotonic() + CUADROS_PARA_BASE, 0
+            while True:
+                resultado = seguimiento_vivo.avanzar(nuevo=self.por_cuadros)
+                if resultado["estado"] == "esperando" and not resultado.get("repetido"):
                     quieto = True
                     break
-                time.sleep(self.intervalo)
+                intentos += 1
+                if (time.monotonic() > limite) if self.por_cuadros else (intentos >= self.cuadros_para_base):
+                    break
+                if not self.por_cuadros:
+                    time.sleep(self.intervalo)
         except (seguimiento_vivo.SinSeguimiento, RuntimeError) as error:
             self._hacer_incidente(f"No se pudo mirar el tablero después de la jugada del brazo ({error}).")
             return
@@ -243,12 +250,13 @@ class PartidaFisica:
 
     def _diferencias_de_ocupacion(self, fen: str) -> list[str] | None:
         """Casillas que la cámara ve ocupadas o vacías al revés de lo que dice `fen`; `None` si no se puede verificar (no hay foto del tablero vacío)."""
-        leida = referencia_vacia.ocupadas({self.camara: _camara.capturar_foto_tablero(camara=self.camara)})
+        piezas = chess.Board(fen).piece_map()
+        esperadas = np.array([chess.parse_square(nombre) in piezas for nombre in referencia_vacia.NOMBRES])
+        leida = referencia_vacia.ocupadas({self.camara: _camara.capturar_foto_tablero(camara=self.camara)}, esperadas=esperadas)
         if leida is None:
             return None
         vistas, _ = leida
-        esperadas = chess.Board(fen).piece_map()
-        return [nombre for nombre, vista in zip(referencia_vacia.NOMBRES, vistas) if bool(vista) != (chess.parse_square(nombre) in esperadas)]
+        return [nombre for nombre, vista, espera in zip(referencia_vacia.NOMBRES, vistas, esperadas) if bool(vista) != bool(espera)]
 
     # --- acciones de la persona -------------------------------------------------------------------------------------------------------------
     def jugada_manual(self, movimiento: str) -> None:
@@ -313,6 +321,8 @@ class PartidaFisica:
             "incidente": self.incidente, "fen": partida.fen, "turno": "blancas" if partida.tablero.turn == chess.WHITE else "negras",
             "jugadas": partida.jugadas_san, "terminada": partida.terminada, "resultado": partida.resultado if partida.terminada else None,
             "usa_brazo": partida.usa_brazo, "camara": self.camara, "seguimiento": self.ultimo_seguimiento, "eventos": list(self.eventos)[-20:],
+            "rendimiento": seguimiento_vivo.rendimiento(),
+            "referencia_vacia": referencia_vacia.cargar_referencia(self.camara) is not None,
             "puede_reintentar": self.estado == INCIDENTE and self.pendiente is not None and partida.usa_brazo,
         }
 
@@ -328,7 +338,10 @@ class PartidaFisica:
             except Exception:  # noqa: BLE001 - el hilo no puede morir en silencio
                 logger.exception("Error inesperado en la partida física %s", self.partida_id)
                 self._hacer_incidente("Error inesperado del sistema (ver el registro del backend).")
-            self._parar.wait(0 if self.por_cuadros else self.intervalo)  # con cuadros nuevos, el propio avanzar() espera al siguiente
+            # Con cuadros nuevos, el propio avanzar() espera al siguiente. Pero en pausa o con un incidente `paso()` vuelve enseguida: sin una pausa el hilo giraría a toda
+            # velocidad, comiéndose la máquina (y el tiempo de la cámara y de las pantallas) mientras no hace nada.
+            vigilando = not self.pausada and self.estado in (ESPERANDO_HUMANO, ESPERANDO_ROBOT_MANUAL)
+            self._parar.wait(0 if (self.por_cuadros and vigilando) else max(self.intervalo, 0.05))
 
     def detener(self) -> None:
         self._parar.set()
