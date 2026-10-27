@@ -182,8 +182,13 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
 
 
 def _agregar_columnas_faltantes(engine: Engine) -> None:
-    inspector = inspect(engine)
     with engine.begin() as conexion:
+        # El inspector se ata a `conexion` (no a `engine`) para que toda la introspección
+        # quede dentro de esta misma transacción: si se ata al engine, cada consulta del
+        # inspector abre su propia conexión nueva, y esa conexión se traba esperando el
+        # lock que esta misma transacción ya tiene tomado sobre la tabla que acaba de alterar
+        # (auto-deadlock de un solo proceso contra sí mismo).
+        inspector = inspect(conexion)
         for tabla, columnas in _COLUMNAS_AGREGADAS.items():
             if not inspector.has_table(tabla):
                 continue
