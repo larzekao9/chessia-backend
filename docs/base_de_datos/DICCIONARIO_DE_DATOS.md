@@ -156,6 +156,7 @@ Personas que usan el sistema, con su rol, su nivel de juego y su perfil.
 | `rango_estimado` | VARCHAR | sí |  |  | `Principiante` (niveles 0-6), `Intermedio` (7-13) o `Avanzado` (14-20). |
 | `edad` | INTEGER | sí |  |  | Edad, de uso libre en el perfil. |
 | `descripcion` | VARCHAR | sí |  |  | Biografía o trayectoria breve, de uso libre en el perfil. |
+| `tema` | VARCHAR | no |  | dia | Apariencia de la web elegida por la cuenta: dia, noche o automatico (sigue el dispositivo). Día por defecto. |
 | `preset_ensenanza` | VARCHAR | sí |  |  | Tono con el que Turing habla: `infantil`, `estandar` o `adultos`. Lo elige el facilitador. |
 | `institucion_id` | INTEGER | sí | FK → institucion.id |  | Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma. |
 | `correo_verificado` | BOOLEAN | no |  | true | `true` si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña queda en `false` solo si el servidor tiene configurado el envío de correo. |
@@ -615,6 +616,7 @@ erDiagram
         VARCHAR rango_estimado
         INTEGER edad
         VARCHAR descripcion
+        VARCHAR tema
         VARCHAR preset_ensenanza
         INTEGER institucion_id FK
         BOOLEAN correo_verificado
@@ -913,6 +915,7 @@ classDiagram
         -VARCHAR rango_estimado
         -INTEGER edad
         -VARCHAR descripcion
+        -VARCHAR tema
         -VARCHAR preset_ensenanza
         -INTEGER institucion_id
         -BOOLEAN correo_verificado

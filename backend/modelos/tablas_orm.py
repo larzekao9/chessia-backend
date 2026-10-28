@@ -64,6 +64,8 @@ class UsuarioORM(Base):
     # suele cubrir experiencia/trayectoria, para un jugador una bio corta.
     edad: Mapped[int | None] = mapped_column(nullable=True)
     descripcion: Mapped[str | None] = mapped_column(nullable=True)
+    tema: Mapped[str] = mapped_column(default="dia", server_default="dia", nullable=False)
+    """Apariencia de la web: `dia`, `noche` o `automatico` (sigue el dispositivo)."""
     # Tono con el que Turing le habla a los estudiantes de este facilitador
     # ('infantil' | 'estandar' | 'adultos') — ver docstring de
     # `ActualizarPerfilRequest.preset_ensenanza`: les llega a los jugadores

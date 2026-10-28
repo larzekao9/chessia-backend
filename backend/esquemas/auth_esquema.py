@@ -107,6 +107,7 @@ class UsuarioResponse(BaseModel):
     tutor_telefono: str | None = None
     tutor_email: str | None = None
     descripcion: str | None = None
+    tema: Literal["dia", "noche", "automatico"] = "dia"
     preset_ensenanza: str | None = None
     diagnostico_completado: bool = False
     partidas_calibradas: int = 0
@@ -302,6 +303,7 @@ class ActualizarPerfilRequest(BaseModel):
     edad: int | None = Field(default=None, ge=0, le=120)
     descripcion: str | None = Field(default=None, max_length=1000)
     preset_ensenanza: PresetEnsenanza | None = None
+    tema: Literal["dia", "noche", "automatico"] = "dia"
     tutor_nombre: str | None = Field(default=None, max_length=100)
     tutor_telefono: str | None = Field(default=None, max_length=30)
     tutor_email: EmailStr | None = None

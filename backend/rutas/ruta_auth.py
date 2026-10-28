@@ -150,6 +150,7 @@ def _a_respuesta(user, partidas_calibradas: int, con_desafio: bool = True) -> Us
         tutor_telefono=user.tutor_telefono,
         tutor_email=user.tutor_email,
         descripcion=user.descripcion,
+        tema=user.tema,
         preset_ensenanza=user.preset_ensenanza,
         diagnostico_completado=partidas_calibradas >= PARTIDAS_DIAGNOSTICO,
         partidas_calibradas=partidas_calibradas,
@@ -545,7 +546,7 @@ def actualizar_perfil_propio(
     user_id: int = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UsuarioResponse:
-    """Edita el perfil del usuario actual (nombre, foto, edad, descripción).
+    """Edita el perfil del usuario actual (nombre, foto, edad, descripción y apariencia).
 
     Disponible para cualquier rol. Edición parcial: solo se actualizan los
     campos que vengan en el request, los que no vienen quedan como estaban.

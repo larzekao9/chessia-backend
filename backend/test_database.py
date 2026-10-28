@@ -97,6 +97,18 @@ def _cargar_generador_de_esquema():
     return modulo
 
 
+def test_base_anterior_recibe_el_tema_dia_sin_perder_perfiles() -> None:
+    motor = create_engine("sqlite:///:memory:", poolclass=StaticPool)
+    with motor.begin() as conexion:
+        conexion.execute(text("CREATE TABLE usuario (id INTEGER PRIMARY KEY, email VARCHAR, nombre VARCHAR, password_hash VARCHAR, rol VARCHAR, creado_en DATETIME, activo BOOLEAN)"))
+        conexion.execute(text("INSERT INTO usuario (id, email, nombre, password_hash, rol, activo) VALUES (1, 'anterior@example.com', 'Alumno', 'hash', 'jugador', 1)"))
+    crear_tablas(motor)
+    crear_tablas(motor)  # El segundo arranque no vuelve a agregar ni sobrescribir la preferencia.
+    with motor.connect() as conexion:
+        fila = conexion.execute(text("SELECT nombre, tema FROM usuario WHERE id = 1")).one()
+    assert fila.nombre == "Alumno" and fila.tema == "dia"
+
+
 def test_diccionario_de_datos_describe_todas_las_tablas_y_columnas() -> None:
     # Si se agrega una tabla o columna al modelo sin describirla en
     # docs/base_de_datos/generar_esquema.py, el script sale con error y esta prueba falla:

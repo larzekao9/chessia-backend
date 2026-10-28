@@ -110,6 +110,7 @@ CREATE TABLE usuario (
 	rango_estimado VARCHAR,
 	edad INTEGER,
 	descripcion VARCHAR,
+	tema VARCHAR DEFAULT 'dia' NOT NULL,
 	preset_ensenanza VARCHAR,
 	institucion_id INTEGER,
 	correo_verificado BOOLEAN DEFAULT 'true' NOT NULL,
@@ -526,6 +527,7 @@ COMMENT ON COLUMN usuario.nivel_estimado IS 'Nivel de juego vigente, de 0 a 20 (
 COMMENT ON COLUMN usuario.rango_estimado IS 'Principiante (niveles 0-6), Intermedio (7-13) o Avanzado (14-20).';
 COMMENT ON COLUMN usuario.edad IS 'Edad, de uso libre en el perfil.';
 COMMENT ON COLUMN usuario.descripcion IS 'Biografía o trayectoria breve, de uso libre en el perfil.';
+COMMENT ON COLUMN usuario.tema IS 'Apariencia de la web elegida por la cuenta: dia, noche o automatico (sigue el dispositivo). Día por defecto.';
 COMMENT ON COLUMN usuario.preset_ensenanza IS 'Tono con el que Turing habla: infantil, estandar o adultos. Lo elige el facilitador.';
 COMMENT ON COLUMN usuario.institucion_id IS 'Institución a la que pertenece un facilitador (docente o administrador). FK → institucion.id. Nulo en los jugadores, cuya institución se deduce de su curso, y en los facilitadores de la plataforma.';
 COMMENT ON COLUMN usuario.correo_verificado IS 'true si el correo está verificado. Las cuentas anteriores y las de Google lo están; una cuenta nueva con contraseña queda en false solo si el servidor tiene configurado el envío de correo.';

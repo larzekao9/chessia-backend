@@ -1,5 +1,7 @@
 # Desplegar en la nube (AWS u otra) — guía lista para usar
 
+Para la instalación actual del equipo, conectada por Tailscale, consultar [Actualizar el servidor home-lab](despliegue_homelab.md). Allí se documentan el acceso, los dos archivos de Compose y la publicación por Funnel.
+
 Complementa la sección "Dónde corre cada cosa" de `PLAN_IMPLEMENTACION_COMPLETO.md` (sección 6):
 la nube sigue siendo **opcional, un plus para mostrar que el software es desplegable** — no
 reemplaza correr todo en local el día de la defensa (cámara y brazo necesitan estar conectados a

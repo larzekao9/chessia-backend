@@ -168,6 +168,7 @@ COLUMNAS: dict[tuple[str, str], str] = {
     ("usuario", "rango_estimado"): "`Principiante` (niveles 0-6), `Intermedio` (7-13) o `Avanzado` (14-20).",
     ("usuario", "edad"): "Edad, de uso libre en el perfil.",
     ("usuario", "descripcion"): "Biografía o trayectoria breve, de uso libre en el perfil.",
+    ("usuario", "tema"): "Apariencia de la web elegida por la cuenta: dia, noche o automatico (sigue el dispositivo). Día por defecto.",
     ("usuario", "preset_ensenanza"): (
         "Tono con el que Turing habla: `infantil`, `estandar` o `adultos`. Lo elige el facilitador."
     ),

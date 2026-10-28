@@ -50,6 +50,7 @@ backend/media/avatares/*
 
 # Caches de test
 .pytest_cache/
+.tmp-apariencia/
 
 # front_app
 front_app/node_modules

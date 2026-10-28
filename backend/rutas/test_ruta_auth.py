@@ -211,6 +211,30 @@ def test_patch_me_guarda_preset_ensenanza(cliente) -> None:
     assert respuesta.json()["preset_ensenanza"] == "infantil"
 
 
+@pytest.mark.parametrize("tema", ["dia", "noche", "automatico"])
+def test_apariencia_se_guarda_en_la_cuenta_y_vuelve_en_el_login(cliente, tema) -> None:
+    registro = cliente.post("/auth/registro", json=JUGADOR).json()
+    assert registro["usuario"]["tema"] == "dia"
+    headers = {"Authorization": f"Bearer {registro['tokens']['access_token']}"}
+    respuesta = cliente.patch("/auth/me", json={"tema": tema}, headers=headers)
+    assert respuesta.status_code == 200
+    assert respuesta.json()["tema"] == tema
+    assert cliente.get("/auth/me", headers=headers).json()["tema"] == tema
+    # Otra edición del perfil no restaura el modo día.
+    assert cliente.patch("/auth/me", json={"descripcion": "Mi perfil"}, headers=headers).json()["tema"] == tema
+    login = cliente.post("/auth/login", json={"email": JUGADOR["email"], "password": JUGADOR["password"]})
+    assert login.status_code == 200
+    assert login.json()["usuario"]["tema"] == tema
+
+
+@pytest.mark.parametrize("tema", [None, "sepia", "", {"modo": "dia"}])
+def test_apariencia_rechaza_valores_desconocidos_sin_modificar_la_cuenta(cliente, tema) -> None:
+    registro = cliente.post("/auth/registro", json=JUGADOR).json()
+    headers = {"Authorization": f"Bearer {registro['tokens']['access_token']}"}
+    assert cliente.patch("/auth/me", json={"tema": tema}, headers=headers).status_code == 422
+    assert cliente.get("/auth/me", headers=headers).json()["tema"] == "dia"
+
+
 def test_patch_me_con_preset_ensenanza_invalido_da_422(cliente) -> None:
     token = cliente.post("/auth/registro", json=JUGADOR).json()["tokens"]["access_token"]
     respuesta = cliente.patch(

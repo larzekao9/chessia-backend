@@ -119,6 +119,7 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
         "avatar_url": "VARCHAR",
         "edad": "INTEGER",
         "descripcion": "VARCHAR",
+        "tema": "VARCHAR NOT NULL DEFAULT 'dia'",
         "preset_ensenanza": "VARCHAR",
         "institucion_id": "INTEGER",
         "correo_verificado": "BOOLEAN NOT NULL DEFAULT TRUE",
