@@ -34,7 +34,7 @@ def test_una_separacion_absurda_se_rechaza() -> None:
     with pytest.raises(ValueError, match="separación"):
         cambios_para("brazo", 0, 1, [100.0, 0.0], None, 100.0, 2.0)  # dos milímetros: se soltó en otro lugar
     with pytest.raises(ValueError, match="separación"):
-        cambios_para("brazo", 0, 1, [100.0, 0.0], None, 100.0, 400.0)
+        cambios_para("brazo", 0, 1, [100.0, 0.0], None, 100.0, 1500.0)
 
 
 def test_el_desnivel_sale_de_la_altura_de_la_pinza() -> None:

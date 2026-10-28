@@ -296,8 +296,8 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
             if not isinstance(valor, bool):
                 raise ErrorControl(422, "cementerio_por_piezas tiene que ser verdadero o falso")
         elif clave == "reservas":
-            if not isinstance(valor, dict) or any(k not in ("dama_blanca", "dama_negra") or not _es_par(v) for k, v in valor.items()):
-                raise ErrorControl(422, "reservas: dama_blanca y dama_negra, cada una [x, y] en mm")
+            if not isinstance(valor, dict) or any(k not in ("dama_blanca", "dama_negra", "torre_blanca", "torre_negra", "alfil_blanco", "alfil_negro", "caballo_blanco", "caballo_negro") or not _es_par(v) for k, v in valor.items()):
+                raise ErrorControl(422, "reservas: dama, torre, alfil o caballo (_blanca o _negra), cada una [x, y] en mm")
         elif clave == "z_tope":
             if valor is not None and not isinstance(valor, (int, float)):
                 raise ErrorControl(422, "z_tope debe ser un número")

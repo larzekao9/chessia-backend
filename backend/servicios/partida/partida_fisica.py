@@ -1,26 +1,26 @@
 """Partida física: el humano mueve a mano, la cámara lo detecta, Turing responde y el brazo ejecuta la respuesta.
 
 Une las piezas que ya existen: el seguimiento por diferencias (`seguimiento_vivo`) detecta la jugada del humano, `servicio_partida.mover` decide la respuesta del
-oponente de la partida (Turing con `tipo_oponente="modelo"`), `servicio_brazo` la ejecuta y la ocupación de la cámara comprueba que el tablero físico quedó
-igual que el digital. La fuente de verdad es el tablero digital de la `Partida`; la cámara solo detecta y verifica.
+oponente de la partida (Turing con `tipo_oponente="modelo"`) y `servicio_brazo` la ejecuta. La cámara detecta las jugadas comparando cuadros consecutivos;
+no usa la lectura de ocupación ni la foto del tablero vacío durante una partida física, porque una sombra o un reflejo no deben interrumpirla. La fuente de
+verdad es el tablero digital de la `Partida`.
 
 Estados (un solo hilo los recorre, un cuadro por segundo):
 
-    esperando_humano ──jugada legal detectada──▶ turing_decide ──▶ brazo_ejecuta ──▶ verificando ──▶ esperando_humano
-                                                       │ (sin brazo)                     │ no coincide / el brazo falla
+    esperando_humano ──jugada legal detectada──▶ turing_decide ──▶ brazo_ejecuta ──▶ esperando_humano
+                                                       │ (sin brazo)                     │ el brazo falla
                                                        ▼                                 ▼
                                              esperando_robot_manual                  incidente ──(una persona lo resuelve)──▶ …
     fin: la partida terminó. detenida: se paró el seguimiento.
 
 Reglas: el brazo solo se mueve con el tablero quieto (el seguimiento solo da por hecha una jugada con el tablero quieto) y nunca ejecuta la jugada del humano; cada
-jugada se ejecuta una sola vez por número de jugada; si el brazo falla o el tablero no coincide, la partida pasa a `incidente` y no sigue hasta que una persona
-lo resuelva; Turing solo corona a dama; el tiempo del brazo no se descuenta del reloj (el reloj solo mide las decisiones).
+jugada se ejecuta una sola vez por número de jugada; si el brazo falla, la partida pasa a `incidente` y no sigue hasta que una persona lo resuelva; Turing solo
+corona a dama; el tiempo del brazo no se descuenta del reloj (el reloj solo mide las decisiones).
 """
 from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections import deque
 from datetime import datetime, timezone
 
@@ -30,14 +30,13 @@ import numpy as np
 from backend.servicios.brazo import servicio_brazo
 from backend.servicios.partida import ciclo_vida, servicio_partida
 from backend.servicios.vision import camara as _camara
-from backend.servicios.vision import referencia_vacia, seguimiento_vivo
+from backend.servicios.vision import seguimiento_vivo
 
 logger = logging.getLogger(__name__)
 
 ESPERANDO_HUMANO = "esperando_humano"
 TURING_DECIDE = "turing_decide"
 BRAZO_EJECUTA = "brazo_ejecuta"
-VERIFICANDO = "verificando"
 ESPERANDO_ROBOT_MANUAL = "esperando_robot_manual"
 INCIDENTE = "incidente"
 FIN = "fin"
@@ -48,17 +47,6 @@ FALLOS_DE_CAMARA_MAXIMOS = 5
 """Segundos seguidos sin poder leer la cámara antes de dar un incidente."""
 PAUSA_TRAS_FALLO_S = 0.2
 """Pausa tras un fallo de la cámara (mientras se reinicia): sin ella el bucle, que no espera entre cuadros, giraría sin parar."""
-CUADROS_PARA_BASE = 12
-"""Segundos que se espera, como máximo, a que el tablero quede quieto para tomar la foto base tras la jugada del brazo (con un intervalo real; en las pruebas, cuadros)."""
-DIFERENCIAS_TOLERADAS = 1
-"""Casillas ocupadas distintas entre la cámara y la posición que se avisan pero no frenan la partida; con más, incidente."""
-ESPERA_PARA_DESPEJAR_S = 4.0
-"""Si tras la jugada del brazo la cámara ve más casillas distintas de las toleradas, se vuelve a mirar durante este tiempo antes de dar un incidente: lo más común es una mano
-(o el brazo) que sigue sobre el tablero, y la cámara la ve como piezas donde no las hay."""
-PAUSA_ENTRE_REVISIONES_S = 0.5
-"""Cada cuánto se vuelve a mirar mientras se espera a que se despeje el tablero."""
-
-
 class Ocupado(Exception):
     """La partida física está haciendo algo (Turing pensando, el brazo moviéndose): esperar."""
 
@@ -85,7 +73,6 @@ class PartidaFisica:
         self.por_cuadros = intervalo > 0
         """Con un intervalo real, el seguimiento va al ritmo de los cuadros de la cámara; con 0 (pruebas), una foto por paso."""
         self.fallos_maximos = round(FALLOS_DE_CAMARA_MAXIMOS / PAUSA_TRAS_FALLO_S) if intervalo > 0 else FALLOS_DE_CAMARA_MAXIMOS
-        self.cuadros_para_base = max(CUADROS_PARA_BASE, round(CUADROS_PARA_BASE / intervalo)) if intervalo > 0 else CUADROS_PARA_BASE
         self._cerrojo = threading.RLock()
         self._trabajo = threading.Lock()
         self._parar = threading.Event()
@@ -119,12 +106,13 @@ class PartidaFisica:
     # --- el ciclo ---------------------------------------------------------------------------------------------------------------------------
     def paso(self) -> None:
         """Un cuadro: según el estado, vigila el tablero o no hace nada."""
-        if self.pausada or self.estado not in (ESPERANDO_HUMANO, ESPERANDO_ROBOT_MANUAL):
+        estados_que_miran = (ESPERANDO_HUMANO, ESPERANDO_ROBOT_MANUAL)
+        if self.pausada or self.estado not in estados_que_miran:
             return
         if not self._trabajo.acquire(blocking=False):
             return
         try:
-            if self.estado not in (ESPERANDO_HUMANO, ESPERANDO_ROBOT_MANUAL):
+            if self.estado not in estados_que_miran:
                 return
             try:
                 resultado = seguimiento_vivo.avanzar(nuevo=self.por_cuadros)
@@ -217,79 +205,18 @@ class PartidaFisica:
         self._verificar()
 
     def _verificar(self) -> None:
-        """Tras la jugada del brazo: foto base nueva con la posición digital y comprobación por ocupación de que el tablero físico coincide."""
-        self._fijar(VERIFICANDO, "Comprobando que el tablero quedó como debe…")
+        """Tras la jugada del brazo, cambia de inmediato la base al último cuadro para detectar el próximo movimiento humano."""
         fen = self._partida().fen
         try:
-            # El brazo ya terminó y volvió a su descanso: no hay ninguna mano en el tablero, así que la foto base se toma enseguida (unos 0,1 s) y la próxima jugada de la
-            # persona se reconoce sin demora, en vez de esperar un segundo con el tablero quieto.
-            seguimiento_vivo.fijar_posicion(fen, rapido=True)
-            quieto, limite, intentos = False, time.monotonic() + CUADROS_PARA_BASE, 0
-            while True:
-                resultado = seguimiento_vivo.avanzar(nuevo=self.por_cuadros)
-                if resultado["estado"] == "esperando" and not resultado.get("repetido"):
-                    quieto = True
-                    break
-                intentos += 1
-                if (time.monotonic() > limite) if self.por_cuadros else (intentos >= self.cuadros_para_base):
-                    break
-                if not self.por_cuadros:
-                    time.sleep(self.intervalo)
+            # El brazo ya confirmó su descanso. Se toma un único cuadro nuevo como base (no una secuencia de estabilidad): el próximo cuadro será el que se compare
+            # con esta posición para reconocer directamente a la persona.
+            seguimiento_vivo.fijar_base_inmediata(fen)
         except (seguimiento_vivo.SinSeguimiento, RuntimeError) as error:
             self._hacer_incidente(f"No se pudo mirar el tablero después de la jugada del brazo ({error}).")
             return
-        if not quieto:
-            self._hacer_incidente("El tablero no quedó quieto después de la jugada del brazo.")
-            return
-        diferencias = self._diferencias_de_ocupacion(fen)
-        if diferencias is not None and len(diferencias) > DIFERENCIAS_TOLERADAS:
-            diferencias = self._esperar_a_que_se_despeje(fen, diferencias)
-        if diferencias is None:
-            self._registrar("Sin foto del tablero vacío: no se pudo verificar la ocupación (se sigue igual).")
-        elif len(diferencias) > DIFERENCIAS_TOLERADAS:
-            self._hacer_incidente(f"El tablero físico no coincide con la partida en {', '.join(diferencias)}.")
-            return
-        elif diferencias:
-            self._registrar(f"Revisá la casilla {diferencias[0]}: la cámara la ve distinta a la posición (no frena la partida).")
         self.pendiente = None
         if not self._terminar_si_corresponde():
             self._fijar(ESPERANDO_HUMANO, "Tu turno.")
-
-    def _esperar_a_que_se_despeje(self, fen: str, diferencias: list[str]) -> list[str]:
-        """Una mano (o el brazo) tapando el tablero hace que la cámara vea piezas donde no las hay: antes de dar un incidente se vuelve a mirar hasta `ESPERA_PARA_DESPEJAR_S`.
-
-        Si se despeja, se vuelve a tomar la foto base (se había tomado con la mano puesta y, al retirarla, parecería una jugada). Devuelve las diferencias de la última mirada.
-        """
-        limite = time.monotonic() + ESPERA_PARA_DESPEJAR_S
-        esperando = False
-        while len(diferencias) > DIFERENCIAS_TOLERADAS and time.monotonic() < limite and not self._parar.is_set():
-            esperando = True
-            self._fijar(VERIFICANDO, f"Algo tapa el tablero en {', '.join(diferencias[:4])} (¿una mano?): esperando a que se despeje…")
-            time.sleep(PAUSA_ENTRE_REVISIONES_S)
-            try:
-                nuevas = self._diferencias_de_ocupacion(fen)
-            except RuntimeError:
-                break
-            if nuevas is None:
-                break
-            diferencias = nuevas
-        if esperando and len(diferencias) <= DIFERENCIAS_TOLERADAS:
-            try:
-                seguimiento_vivo.fijar_posicion(fen, rapido=True)
-                self._registrar("Se despejó el tablero: foto base nueva.")
-            except (seguimiento_vivo.SinSeguimiento, RuntimeError):
-                pass
-        return diferencias
-
-    def _diferencias_de_ocupacion(self, fen: str) -> list[str] | None:
-        """Casillas que la cámara ve ocupadas o vacías al revés de lo que dice `fen`; `None` si no se puede verificar (no hay foto del tablero vacío)."""
-        piezas = chess.Board(fen).piece_map()
-        esperadas = np.array([chess.parse_square(nombre) in piezas for nombre in referencia_vacia.NOMBRES])
-        leida = referencia_vacia.ocupadas({self.camara: _camara.capturar_foto_tablero(camara=self.camara)}, esperadas=esperadas)
-        if leida is None:
-            return None
-        vistas, _ = leida
-        return [nombre for nombre, vista, espera in zip(referencia_vacia.NOMBRES, vistas, esperadas) if bool(vista) != bool(espera)]
 
     # --- acciones de la persona -------------------------------------------------------------------------------------------------------------
     def jugada_manual(self, movimiento: str) -> None:
@@ -356,7 +283,6 @@ class PartidaFisica:
             "usa_brazo": partida.usa_brazo, "camara": self.camara, "seguimiento": self.ultimo_seguimiento, "eventos": list(self.eventos)[-20:],
             "rendimiento": seguimiento_vivo.rendimiento(),
             "cementerio": servicio_brazo.resumen_del_cementerio(partida.tablero),
-            "referencia_vacia": referencia_vacia.cargar_referencia(self.camara) is not None,
             "puede_reintentar": self.estado == INCIDENTE and self.pendiente is not None and partida.usa_brazo,
         }
 

@@ -58,10 +58,9 @@ SEGUNDOS_QUIETO = 0.15
 """Cuánto tiempo tiene que estar el tablero quieto para dar por hecha una jugada (con `ticks_para`, según el ritmo al que se mira)."""
 SEGUNDOS_BASE = 1.0
 """Cuánto tiempo tiene que estar el tablero quieto para tomar la FOTO BASE (más que para dar una jugada: si se toma con la mano encima, todo lo que venga después se compara contra una mano)."""
-TICKS_BASE_RAPIDA = 3
-"""Cuadros quietos seguidos para tomar la FOTO BASE justo después de que el brazo terminó y volvió a su posición de descanso (`fijar_posicion(rapido=True)`): nadie tiene la
-mano sobre el tablero, así que no hace falta esperar un segundo entero. Son unos 0,1 s a 30 cuadros por segundo; con menos de 3 cuadros, un cuadro tomado con el brazo todavía
-en movimiento podría quedar de base."""
+TICKS_BASE_RAPIDA = 1
+"""Cuadros para tomar la FOTO BASE justo después de que el brazo confirmó que terminó y volvió a su posición de descanso (`fijar_posicion(rapido=True)`). Es un único cuadro
+nuevo: el brazo ya no está en el tablero y esperar estabilidad entre cuadros puede quedar bloqueado por el brillo o vibración de una webcam."""
 SEGUNDOS_BASE_SUCIA = 4.0
 """Si un cambio que ninguna jugada explica (y que toca 5 casillas o más) dura tanto, la foto base probablemente tiene la mano encima: se vuelve a tomar."""
 SEGUNDOS_AJUSTE = 3.0
@@ -384,6 +383,12 @@ class Seguimiento:
             return self._respuesta("moviendo", "Hay movimiento en el tablero: esperando que quede quieto…", entre_cuadros)
         self.estables += 1
         if self.base is None:
+            if self.base_rapida:
+                # El ejecutor del brazo ya confirmó que volvió al descanso antes de llamar a `fijar_posicion(rapido=True)`. Tomar el primer cuadro NUEVO evita que un
+                # brillo, autoexposición o vibración mínima entre dos cuadros deje bloqueado el turno de la persona durante minutos.
+                self.base, self.base_img, self.base_rapida = lab, enderezada, False
+                self._guardar_analisis(enderezada, None, frozenset(), frozenset())
+                return self._respuesta("esperando", "Foto base rápida tomada. Esperando la próxima jugada.", frozenset())
             if self.estables < (self.ticks_base_rapida if self.base_rapida else self.ticks_base):
                 return self._respuesta("tomando_base", "Esperando que el tablero esté quieto para tomar la foto base…", frozenset(), vista=False)
             self.base, self.base_img, self.base_rapida = lab, enderezada, False
@@ -440,6 +445,12 @@ class Seguimiento:
             if self.parciales < self.ticks_parcial:
                 lo_que_falta = ", ".join(sorted(explicacion.faltan))
                 return self._respuesta("incompleta", f"Jugada a medias: cambió {', '.join(sorted(cambiadas))} y falta mover algo en {lo_que_falta}. Esperando que la completes…", cambiadas)
+            if len(cambiadas) == 1:
+                # Una sola casilla puede ser una sombra, un brillo o el extremo de una pieza que la cámara no logró ver completa. No se acepta ni se incorpora a la
+                # base (faltaría confirmar el origen), pero tampoco se acusa una posición inválida: así un falso cambio aislado no corta el turno del jugador.
+                lo_que_falta = ", ".join(sorted(explicacion.faltan))
+                self.sin_explicar = 0
+                return self._respuesta("incompleta", f"Solo se ve cambio en {', '.join(sorted(cambiadas))}; falta confirmar {lo_que_falta}. Esperando la jugada completa…", cambiadas)
         self.sin_explicar += 1
         if self.sin_explicar < self.ticks_invalida:  # una mano que se queda un momento sobre el tablero no es una alerta
             return self._respuesta("moviendo", "Hay cambios en el tablero: esperando que termine el movimiento…", cambiadas)

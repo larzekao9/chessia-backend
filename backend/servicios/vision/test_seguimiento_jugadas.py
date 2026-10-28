@@ -172,12 +172,13 @@ def test_una_pieza_levantada_no_cambia_el_turno_y_al_devolverla_sigue_igual() ->
     assert seg.jugadas == ["e4"] and seg.fen.split(" ")[0] == tras.split(" ")[0]
 
 
-def test_una_pieza_a_medias_mucho_tiempo_acaba_en_alerta() -> None:
+def test_un_cambio_aislado_no_se_convierte_en_posicion_invalida() -> None:
     seg = sj.Seguimiento(ESQ)
     inicio = chess.STARTING_FEN
     _quieto(seg, inicio, 3)
     res = _quieto(seg, _sin(inicio, chess.G1), sj.TICKS_PARCIAL + 3, 200)
-    assert res[-1]["estado"] == "invalida" and "g1" in res[-1]["mensaje"]
+    assert res[-1]["estado"] == "incompleta" and "g1" in res[-1]["mensaje"]
+    assert seg.jugadas == [] and seg.fen == inicio
 
 
 def test_tras_una_jugada_invalida_devolver_la_pieza_no_salta_el_turno() -> None:
@@ -355,16 +356,16 @@ def test_lo_que_cambia_en_las_casillas_de_la_jugada_recien_hecha_se_absorbe() ->
     assert all(r["estado"] != "invalida" for r in res) and seg.jugadas == ["e4"]
 
 
-def test_la_foto_base_rapida_se_toma_en_tres_cuadros_aunque_el_anterior_sea_de_antes_del_brazo() -> None:
-    """Justo después de que el brazo terminó no hay ninguna mano en el tablero: la foto base se toma en 3 cuadros (~0,1 s), sin el segundo entero de quietud, y el cuadro
+def test_la_foto_base_rapida_se_toma_en_un_cuadro_aunque_el_anterior_sea_de_antes_del_brazo() -> None:
+    """Justo después de que el brazo terminó no hay ninguna mano en el tablero: la foto base se toma en 1 cuadro nuevo, sin esperar estabilidad entre cuadros, y el cuadro
     de antes de que el brazo moviera la pieza no se compara con el de ahora (daría «movimiento» y haría esperar de más)."""
     inicio, tras_e4 = chess.STARTING_FEN, _posicion_tras("e2e4")
     seg = sj.Seguimiento(ESQ, **sj.ticks_para(1 / 30))
     _correr(seg, [_frame(inicio, semilla=s) for s in range(1, 40)])  # foto base inicial: 1 s quieto
     assert seg.base is not None
     seg.fijar_posicion(tras_e4, rapido=True)  # el robot jugó e2e4
-    res = _correr(seg, [_frame(tras_e4, semilla=100 + s) for s in range(3)])
-    assert [r["estado"] for r in res] == ["tomando_base", "tomando_base", "esperando"] and seg.base is not None and seg.fen == tras_e4
+    res = _correr(seg, [_frame(tras_e4, semilla=100)])
+    assert [r["estado"] for r in res] == ["esperando"] and seg.base is not None and seg.fen == tras_e4
     assert seg.base_rapida is False  # la próxima foto base ya vuelve a ser la prudente
 
 
@@ -381,6 +382,6 @@ def test_una_jugada_de_la_persona_justo_despues_de_la_foto_base_rapida_se_recono
     inicio, tras_e4, tras_e5 = chess.STARTING_FEN, _posicion_tras("e2e4"), _posicion_tras("e2e4", "e7e5")
     seg = sj.Seguimiento(ESQ, tras_e4, **sj.ticks_para(1 / 30))
     seg.fijar_posicion(tras_e4, rapido=True)
-    _correr(seg, [_frame(tras_e4, semilla=100 + s) for s in range(3)])  # base lista en 3 cuadros
+    _correr(seg, [_frame(tras_e4, semilla=100)])  # base lista en un cuadro nuevo
     res = _correr(seg, [_frame(tras_e5, mano=True, semilla=200)] + [_frame(tras_e5, semilla=201 + i) for i in range(8)])
     assert seg.jugadas == ["e5"] and any(r["estado"] == "jugada" for r in res)

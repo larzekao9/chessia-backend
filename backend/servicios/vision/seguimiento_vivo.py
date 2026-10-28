@@ -29,6 +29,8 @@ _fallo_guardado = False
 _ultimo_cuadro = 0
 _ultimo_resultado: dict | None = None
 _actual: seguimiento_jugadas.Seguimiento | None = None
+_ultima_vista: dict | None = None
+"""Última comparación con imágenes completas. Se conserva mientras se toma una nueva foto base después del brazo para que la pantalla no quede vacía."""
 _camara = "principal"
 _intervalo_supuesto = 1.0
 """Cada cuántos segundos se supone que llega un cuadro (con el que se calcularon los cuadros quietos de `_actual`): ver `_adaptar_al_ritmo`."""
@@ -55,13 +57,14 @@ def iniciar(fen: str | None = None, camara: str = "principal", intervalo_s: floa
     Raises:
         ValueError: FEN inválido o la cámara no está calibrada.
     """
-    global _actual, _camara, _ultimo_cuadro, _ultimo_resultado, _intervalo_supuesto, _ms_cuadro
+    global _actual, _ultima_vista, _camara, _ultimo_cuadro, _ultimo_resultado, _intervalo_supuesto, _ms_cuadro
     esquinas = tablero.cargar_esquinas_calibradas(tablero.archivo_esquinas(camara))
     if esquinas is None:
         raise ValueError(f"La cámara {camara} no está calibrada: calibrala antes de seguir una partida")
     chess.Board(fen or chess.STARTING_FEN)  # valida (ValueError)
     with _cerrojo:
         _actual = seguimiento_jugadas.Seguimiento(esquinas, fen or chess.STARTING_FEN, **seguimiento_jugadas.ticks_para(intervalo_s))
+        _ultima_vista = None
         _camara = camara
         _ultimo_cuadro, _ultimo_resultado = 0, None
         _intervalo_supuesto, _ms_cuadro = max(float(intervalo_s), 0.01), None
@@ -69,9 +72,10 @@ def iniciar(fen: str | None = None, camara: str = "principal", intervalo_s: floa
 
 
 def detener() -> dict:
-    global _actual
+    global _actual, _ultima_vista
     with _cerrojo:
         _actual = None
+        _ultima_vista = None
     return {"activo": False}
 
 
@@ -94,6 +98,46 @@ def fijar_posicion(fen: str, rapido: bool = False) -> dict:
             raise SinSeguimiento()
         _actual.fijar_posicion(fen, rapido)
         return _datos(_actual, _camara)
+
+
+def fijar_base_inmediata(fen: str) -> dict:
+    """Después del descanso del brazo, toma *un cuadro posterior* como base y devuelve el turno humano.
+
+    No se espera una secuencia de fotos quietas ni se vuelve a decidir la jugada del brazo. Pero usar sin más el último cuadro de la cola puede tomar uno de antes
+    de que el brazo se retire (o el primero mientras la persona ya acerca la mano). Se salta el cuadro disponible y se espera solo el siguiente: a 14 fps son unos
+    70 ms. El título «Tu turno» se publica recién después de esa base limpia.
+    """
+    global _ultimo_cuadro, _ultimo_resultado
+    with _cerrojo:
+        if _actual is None:
+            raise SinSeguimiento()
+        seguimiento, camara = _actual, _camara
+
+    numero, imagen = 0, None
+    try:
+        # Primero se conoce cuál es el último cuadro ya disponible; el segundo pedido exige uno posterior a él. No se bloquea más de una fracción de segundo si la
+        # cámara viene lenta: en ese caso se conserva el cuadro disponible, antes que dejar al jugador esperando indefinidamente.
+        disponible = esperar_foto_nueva(0, camara, timeout=0.05)
+        if disponible is not None:
+            numero, imagen = disponible
+            siguiente = esperar_foto_nueva(numero, camara, timeout=0.35)
+            if siguiente is not None:
+                numero, imagen = siguiente
+    except RuntimeError:
+        # En las cámaras que se están abriendo o reiniciando, `capturar_foto_tablero` mantiene su espera y su error ya conocido.
+        imagen = None
+    if imagen is None:
+        imagen = capturar_foto_tablero(camara=camara)
+
+    with _cerrojo:
+        if _actual is not seguimiento:
+            raise SinSeguimiento()
+        seguimiento.fijar_posicion(fen, rapido=True)
+        resultado = seguimiento.actualizar(imagen)
+        # El cuadro que acabamos de usar como base no se procesa una segunda vez en `avanzar(nuevo=True)` como si fuera la jugada humana.
+        _ultimo_cuadro = numero
+        _ultimo_resultado = {"activo": True, "camara": camara, **resultado, "alerta": seguimiento.ultima_alerta}
+        return {**_datos(seguimiento, camara), **resultado}
 
 
 def rebasar() -> dict:
@@ -128,10 +172,14 @@ def vista() -> dict:
     Raises:
         SinSeguimiento: no hay seguimiento.
     """
+    global _ultima_vista
     with _cerrojo:
         if _actual is None:
             raise SinSeguimiento()
-        return _actual.vista()
+        vista_actual = _actual.vista()
+        if vista_actual.get("disponible"):
+            _ultima_vista = vista_actual
+        return _ultima_vista or vista_actual
 
 
 def rendimiento() -> dict:

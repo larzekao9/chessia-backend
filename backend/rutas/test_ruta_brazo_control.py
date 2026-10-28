@@ -249,7 +249,7 @@ def test_prueba_manual_de_captura_y_de_pieza_al_cementerio_en_el_emulador(client
     cliente.post("/brazo/control/mover-pieza", json={"origen": "a8", "al_cementerio": True, "tipo_pieza": "r", "casilla_cementerio": 3})
     assert _esperar_tarea(cliente)["estado"] == "terminada"
     assert "a8" not in control_brazo._estado.emulador[0].tablero_piezas()
-    for malo in ({"origen": "a8", "al_cementerio": True, "casilla_cementerio": 40}, {"origen": "a8", "destino": ""}, {"origen": "a8", "tipo_pieza": "x", "destino": "a7"}):
+    for malo in ({"origen": "a8", "al_cementerio": True, "casilla_cementerio": 72}, {"origen": "a8", "destino": ""}, {"origen": "a8", "tipo_pieza": "x", "destino": "a7"}):
         assert cliente.post("/brazo/control/mover-pieza/ensayo", json=malo).status_code == 422, malo
 
 

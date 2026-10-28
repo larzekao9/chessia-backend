@@ -2,13 +2,11 @@
 from types import SimpleNamespace
 
 import chess
-import numpy as np
 import pytest
 
 from backend.servicios.brazo import servicio_brazo
 from backend.servicios.partida import partida_fisica as pf
 from backend.servicios.partida import servicio_partida
-from backend.servicios.vision import referencia_vacia as rv
 from backend.servicios.vision import seguimiento_vivo, tablero
 from backend.servicios.vision.test_seguimiento_jugadas import ESQ, _frame
 
@@ -16,19 +14,17 @@ from backend.servicios.vision.test_seguimiento_jugadas import ESQ, _frame
 @pytest.fixture
 def mundo(monkeypatch):
     """El tablero físico (`fisico`, un FEN que ve la cámara), lo que responde Turing y lo que hace el brazo."""
-    mundo = SimpleNamespace(fisico=chess.STARTING_FEN, mano=False, cuadros=0, respuestas=["e5", "Nc6", "Nf6"], brazo=[], falla_brazo=None, ocupacion_torcida=None)
+    mundo = SimpleNamespace(fisico=chess.STARTING_FEN, mano=False, cuadros=0, respuestas=["e5", "Nc6", "Nf6"], brazo=[], falla_brazo=None)
 
     def capturar(camara="principal"):
         mundo.cuadros += 1
         return _frame(mundo.fisico, mano=mundo.mano, semilla=mundo.cuadros)
 
-    def ocupadas(fotos, esperadas=None):
-        presentes = chess.Board(mundo.fisico).piece_map()
-        vistas = np.array([chess.parse_square(n) in presentes for n in rv.NOMBRES])
-        if mundo.ocupacion_torcida:
-            for nombre in mundo.ocupacion_torcida:
-                vistas[rv.NOMBRES.index(nombre)] = not vistas[rv.NOMBRES.index(nombre)]
-        return vistas, "principal"
+    def esperar_nuevo(_despues_de=0, _camara="principal", timeout=0.25):
+        """La cámara continua del ensayo entrega enseguida el siguiente cuadro, sin abrir una webcam real."""
+        del timeout
+        mundo.cuadros += 1
+        return mundo.cuadros, _frame(mundo.fisico, mano=mundo.mano, semilla=mundo.cuadros)
 
     class Turing:
         def decidir_jugada(self, fen):
@@ -44,9 +40,8 @@ def mundo(monkeypatch):
 
     monkeypatch.setattr(tablero, "cargar_esquinas_calibradas", lambda *_a, **_k: ESQ)
     monkeypatch.setattr(seguimiento_vivo, "capturar_foto_tablero", capturar)
+    monkeypatch.setattr(seguimiento_vivo, "esperar_foto_nueva", esperar_nuevo)
     monkeypatch.setattr(pf._camara, "capturar_foto_tablero", capturar)
-    monkeypatch.setattr(pf.referencia_vacia, "ocupadas", ocupadas)
-    monkeypatch.setattr(pf, "ESPERA_PARA_DESPEJAR_S", 0.0)  # las pruebas de «no coincide» no esperan a que se despeje el tablero (ver la prueba de la mano)
     monkeypatch.setattr(servicio_partida, "crear_estrategia_jugada", lambda *_a, **_k: Turing())
     monkeypatch.setattr(servicio_partida, "analizar_posicion", lambda *_a, **_k: {})
     monkeypatch.setattr(servicio_partida, "_calidad_de_la_jugada_humana", lambda *_a, **_k: None)
@@ -128,6 +123,16 @@ def test_un_incidente_se_resuelve_confirmando_que_el_tablero_ya_coincide(mundo) 
     assert sesion.estado_actual()["jugadas"] == ["e4", "e5", "Nf3", "Nc6"] and sesion.estado == pf.ESPERANDO_HUMANO
 
 
+def test_el_relevo_del_brazo_no_espera_estabilidad_ni_repite_la_jugada(mundo, monkeypatch) -> None:
+    """El brazo confirmó descanso: se fija la base con el cuadro disponible y el turno vuelve enseguida a la persona."""
+    sesion = _empezar(mundo)
+    monkeypatch.setattr(seguimiento_vivo, "avanzar", lambda **_k: pytest.fail("El relevo del brazo no debe esperar otro cuadro"))
+
+    sesion._verificar()
+
+    assert sesion.estado == pf.ESPERANDO_HUMANO and not sesion.incidente
+
+
 def test_no_se_resuelve_lo_que_no_es_un_incidente(mundo) -> None:
     sesion = _empezar(mundo)
     with pytest.raises(ValueError, match="incidente"):
@@ -136,29 +141,12 @@ def test_no_se_resuelve_lo_que_no_es_un_incidente(mundo) -> None:
         sesion.resolver_incidente("otra")
 
 
-def test_si_el_tablero_no_coincide_tras_la_jugada_del_brazo_hay_incidente(mundo) -> None:
+def test_la_partida_fisica_no_expone_ni_consulta_ocupacion_tras_la_jugada_del_brazo(mundo) -> None:
+    """Sombras y reflejos no entran en el flujo físico: sólo decide el seguimiento entre fotos."""
     sesion = _empezar(mundo)
-    mundo.ocupacion_torcida = ["a3", "h3"]  # la cámara ve dos casillas distintas a la posición
     _mover_a_mano(mundo, sesion, "e2e4")
-    assert sesion.estado == pf.INCIDENTE and "a3" in sesion.incidente
-
-
-def test_una_mano_que_tapa_el_tablero_tras_la_jugada_del_brazo_no_da_incidente_si_se_retira(mundo, monkeypatch) -> None:
-    """La cámara ve dos casillas distintas porque una mano sigue sobre el tablero: se espera, y al retirarla la partida sigue sin incidente."""
-    sesion = _empezar(mundo)
-    monkeypatch.setattr(pf, "ESPERA_PARA_DESPEJAR_S", 5.0)
-    monkeypatch.setattr(pf, "PAUSA_ENTRE_REVISIONES_S", 0.0)
-    mundo.ocupacion_torcida = ["f2", "h2"]
-
-    def retirar_la_mano(_segundos) -> None:
-        mundo.ocupacion_torcida = None
-
-    monkeypatch.setattr(pf.time, "sleep", retirar_la_mano)
-
-    _mover_a_mano(mundo, sesion, "e2e4")
-
     assert sesion.estado == pf.ESPERANDO_HUMANO and not sesion.incidente
-    assert any("Se despejó el tablero" in e["texto"] for e in sesion.eventos)
+    assert "referencia_vacia" not in sesion.estado_actual()
 
 
 def test_si_la_partida_desaparece_el_estado_responde_que_se_descarto_y_no_falla(mundo) -> None:
@@ -181,13 +169,6 @@ def test_abrir_otra_pantalla_que_crea_una_partida_no_borra_la_de_la_partida_fisi
 
     assert servicio_partida.obtener_partida(partida.id).id == partida.id
     assert pf.estado()["activa"] is True
-
-
-def test_una_casilla_dudosa_se_avisa_pero_no_frena(mundo) -> None:
-    sesion = _empezar(mundo)
-    mundo.ocupacion_torcida = ["a3"]
-    _mover_a_mano(mundo, sesion, "e2e4")
-    assert sesion.estado == pf.ESPERANDO_HUMANO and any("a3" in e["texto"] for e in sesion.eventos)
 
 
 def test_sin_brazo_espera_a_que_la_jugada_del_robot_se_haga_a_mano(mundo) -> None:
@@ -296,40 +277,39 @@ def test_el_estado_puede_traer_la_vista_de_la_comparacion(mundo) -> None:
     datos = pf.estado(con_vista=True)
     assert datos["vista"]["disponible"] and datos["vista"]["base"].startswith("data:image/jpeg")
     assert "vista" not in pf.estado()
+    seguimiento_vivo.fijar_posicion(sesion._partida().fen, rapido=True)
+    assert seguimiento_vivo.vista() == datos["vista"]  # mientras toma la base nueva, conserva las tres imágenes anteriores
     assert sesion.estado == pf.ESPERANDO_HUMANO
 
 
 def test_tras_la_jugada_del_brazo_la_foto_base_se_toma_enseguida_y_no_hace_esperar_a_la_persona(mundo, monkeypatch) -> None:
     """Cuando el brazo termina y vuelve a su descanso no hay ninguna mano en el tablero: la verificación toma la foto base en unos pocos cuadros (no un segundo
     de quietud) para que la jugada siguiente de la persona se reconozca sin demora."""
-    rapidos, usados = [], []
-    fijar = seguimiento_vivo.fijar_posicion
+    bases_inmediatas, usados = [], []
+    fijar = seguimiento_vivo.fijar_base_inmediata
     verificar = pf.PartidaFisica._verificar
 
-    def fijar_registrando(fen, rapido=False):
-        rapidos.append(rapido)
-        return fijar(fen, rapido)
+    def fijar_registrando(fen):
+        bases_inmediatas.append(fen)
+        return fijar(fen)
 
     def verificar_midiendo(self):
         antes = mundo.cuadros
         verificar(self)
         usados.append(mundo.cuadros - antes)
 
-    monkeypatch.setattr(seguimiento_vivo, "fijar_posicion", fijar_registrando)
+    monkeypatch.setattr(seguimiento_vivo, "fijar_base_inmediata", fijar_registrando)
     monkeypatch.setattr(pf.PartidaFisica, "_verificar", verificar_midiendo)
     sesion = _empezar(mundo)
     _mover_a_mano(mundo, sesion, "e2e4")
-    assert rapidos == [True] and sesion.estado == pf.ESPERANDO_HUMANO
-    assert len(usados) == 1 and usados[0] <= 6  # 3 cuadros para la base y uno más para la ocupación
+    assert len(bases_inmediatas) == 1 and sesion.estado == pf.ESPERANDO_HUMANO
+    assert len(usados) == 1 and usados[0] == 2  # se descarta el disponible y el siguiente cuadro pasa a ser la base
     _mover_a_mano(mundo, sesion, "g1f3")  # y la jugada siguiente se reconoce con esa base
     assert sesion.estado_actual()["jugadas"] == ["e4", "e5", "Nf3", "Nc6"]
 
 
-def test_el_estado_de_la_partida_fisica_informa_el_rendimiento_y_si_falta_la_foto_del_tablero_vacio(mundo, monkeypatch) -> None:
-    """Para ver de un vistazo por qué se reconoce lento (cuadros por segundo de la cámara) y por qué no se comprueba la ocupación (falta la foto del tablero vacío)."""
+def test_el_estado_de_la_partida_fisica_informa_el_rendimiento_sin_consultar_tablero_vacio(mundo) -> None:
+    """La partida física informa el ritmo de cámara, pero ya no depende de una foto vacía vulnerable a sombras."""
     sesion = _empezar(mundo)
-    monkeypatch.setattr(pf.referencia_vacia, "cargar_referencia", lambda camara="principal", perfil=None: None)
     datos = sesion.estado_actual()
-    assert datos["referencia_vacia"] is False and set(datos["rendimiento"]) == {"fps_camara", "formato", "ms_cuadro"}
-    monkeypatch.setattr(pf.referencia_vacia, "cargar_referencia", lambda camara="principal", perfil=None: np.zeros((8, 8, 3), np.uint8))
-    assert sesion.estado_actual()["referencia_vacia"] is True
+    assert "referencia_vacia" not in datos and set(datos["rendimiento"]) == {"fps_camara", "formato", "ms_cuadro"}
