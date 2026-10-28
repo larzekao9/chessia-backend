@@ -149,8 +149,11 @@ def ejecutar_respuesta_en_brazo(
     if not partida.usa_brazo:
         return None
     try:
-        ejecutor = _obtener_ejecutor()
-        ejecutor.ejecutar_movimiento(tablero_antes, jugada)
+        if control_brazo.conectado():
+            control_brazo.ejecutar_jugada(tablero_antes, jugada)
+        else:
+            ejecutor = _obtener_ejecutor()
+            ejecutor.ejecutar_movimiento(tablero_antes, jugada)
     except Exception as error:
         logger.exception(
             "Fallo al ejecutar en el brazo la jugada de respuesta de la partida %s", partida.id
