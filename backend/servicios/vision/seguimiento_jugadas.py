@@ -61,6 +61,18 @@ SEGUNDOS_BASE = 1.0
 TICKS_BASE_RAPIDA = 1
 """Cuadros para tomar la FOTO BASE justo después de que el brazo confirmó que terminó y volvió a su posición de descanso (`fijar_posicion(rapido=True)`). Es un único cuadro
 nuevo: el brazo ya no está en el tablero y esperar estabilidad entre cuadros puede quedar bloqueado por el brillo o vibración de una webcam."""
+PUNTAJE_RUIDO = 25.0
+"""Un cambio que ninguna jugada explica y que en TODAS sus casillas queda por debajo de este puntaje (una sombra, un reflejo, una pieza movida un milímetro) no es una jugada: se ignora en vez
+de dar «posición inválida». Las alertas reales de una cámara de verdad tuvieron 16 a 21 en este caso y 31 a 135 las demás; una jugada real, aun con poco contraste, pasa de 30."""
+MAX_CASILLAS_RUIDO = 4
+"""Con más casillas que estas un cambio leve ya no se toma por ruido."""
+SEGUNDOS_RUIDO = 1.0
+"""Cuánto tiene que sostenerse un cambio leve sin explicación antes de ignorarlo (por si es el comienzo de una jugada con poco contraste)."""
+CASILLAS_DESPLAZAMIENTO = 16
+"""Con tantas casillas cambiadas a la vez no hay jugada ni pieza volcada que lo explique: se movió el tablero o la cámara (o cambió la luz). Se vuelve a tomar la foto base sola y se avisa."""
+SEGUNDOS_EDAD_SUCIA = 10.0
+"""Solo en los primeros segundos de una foto base se puede tomar otra sola por «parecía tener la mano encima» (ver `SEGUNDOS_BASE_SUCIA`): más tarde, un cambio grande que ninguna
+jugada explica es de verdad (piezas movidas o volcadas) y rehacer la base lo daría por bueno sin avisar; se queda como alerta hasta que alguien lo arregle."""
 SEGUNDOS_BASE_SUCIA = 4.0
 """Si un cambio que ninguna jugada explica (y que toca 5 casillas o más) dura tanto, la foto base probablemente tiene la mano encima: se vuelve a tomar."""
 SEGUNDOS_AJUSTE = 3.0
@@ -88,7 +100,9 @@ def ticks_para(intervalo_s: float) -> dict[str, int]:
     intervalo = max(float(intervalo_s), 0.01)
     return {"ticks_estable": max(2, round(SEGUNDOS_QUIETO / intervalo)), "ticks_confirmar": max(2, round(SEGUNDOS_QUIETO / intervalo)),
             "ticks_invalida": max(TICKS_INVALIDA, round(SEGUNDOS_INVALIDA / intervalo)), "ticks_base": max(TICKS_BASE, round(SEGUNDOS_BASE / intervalo)),
-            "ticks_sucia": max(TICKS_SUCIA, round(SEGUNDOS_BASE_SUCIA / intervalo)), "ticks_ajuste": max(TICKS_AJUSTE, round(SEGUNDOS_AJUSTE / intervalo)), "ticks_parcial": max(TICKS_PARCIAL, round(SEGUNDOS_PARCIAL / intervalo))}
+            "ticks_sucia": max(TICKS_SUCIA, round(SEGUNDOS_BASE_SUCIA / intervalo)), "ticks_ajuste": max(TICKS_AJUSTE, round(SEGUNDOS_AJUSTE / intervalo)), "ticks_parcial": max(TICKS_PARCIAL, round(SEGUNDOS_PARCIAL / intervalo)),
+            "ticks_ruido": max(3, round(SEGUNDOS_RUIDO / intervalo)),
+            "ticks_edad_sucia": max(max(TICKS_SUCIA, round(SEGUNDOS_BASE_SUCIA / intervalo)) + max(TICKS_BASE, round(SEGUNDOS_BASE / intervalo)) + 6, round(SEGUNDOS_EDAD_SUCIA / intervalo))}
 
 
 def _preparar(imagen: np.ndarray, esquinas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -301,6 +315,8 @@ class Seguimiento:
     ticks_sucia: int = TICKS_SUCIA
     ticks_ajuste: int = TICKS_AJUSTE
     ticks_base_rapida: int = TICKS_BASE_RAPIDA
+    ticks_edad_sucia: int = 12
+    ticks_ruido: int = 3
     cambio_minimo: float = CAMBIO_MINIMO
     base: np.ndarray | None = field(default=None, repr=False)
     base_img: np.ndarray | None = field(default=None, repr=False)
@@ -321,6 +337,14 @@ class Seguimiento:
     congelado: bool = False
     """Tras aceptar una jugada, el análisis se queda con ella (antes y después) hasta que algo se mueva otra vez."""
     base_rapida: bool = False
+    ruido: int = 0
+    """Cuadros seguidos con un cambio leve sin explicación (ver `PUNTAJE_RUIDO`)."""
+    aviso: str = ""
+    """Algo que el seguimiento resolvió solo y conviene dejar escrito (ver `_respuesta`): se informa una vez."""
+    edad: int = 0
+    """Cuadros procesados desde que se pidió la última foto base (ver `SEGUNDOS_EDAD_SUCIA`)."""
+    previa: tuple | None = field(default=None, repr=False)
+    """Lo que había justo antes de aceptar la última jugada `(fen, base, base_img)`: para `retroceder`."""
     """La próxima foto base se toma con `ticks_base_rapida` cuadros quietos en vez de `ticks_base` (ver `fijar_posicion`)."""
 
     def fijar_posicion(self, fen: str, rapido: bool = False) -> None:
@@ -353,7 +377,24 @@ class Seguimiento:
         self._reiniciar_base()
         return san
 
+    def retroceder(self) -> bool:
+        """Deshace la jugada recién aceptada SIN tomar otra foto base: vuelve a la posición y a la foto de antes de ella, así que la próxima vez que el tablero quede quieto se
+        lee de nuevo contra esa misma base. Sirve cuando la persona cambia la pieza o la deja en otro sitio justo después de soltarla. `False` si no hay jugada que retroceder."""
+        if self.previa is None:
+            return False
+        self.fen, self.base, self.base_img = self.previa
+        if self.historial:
+            self.historial.pop()
+        if self.jugadas:
+            self.jugadas.pop()
+        self.previa = None
+        self.estables = self.parciales = self.confirmaciones = self.sin_explicar = self.ajuste_restante = 0
+        self.pendiente, self.congelado = None, False
+        self.estado, self.ultima_alerta = "moviendo", ""
+        return True
+
     def _reiniciar_base(self, rapido: bool = False) -> None:
+        self.edad, self.previa, self.ruido = 0, None, 0
         self.base = self.base_img = None
         self.base_rapida = rapido
         if rapido:
@@ -373,11 +414,12 @@ class Seguimiento:
         con cambios que ninguna jugada legal explica), `dudosa` (más de una jugada encaja).
         """
         enderezada, lab = _preparar(imagen, self.esquinas)
+        self.edad += 1
         entre_cuadros = _casillas_desde(puntajes_de_cambio(self.anterior, lab), self.cambio_minimo) if self.anterior is not None else frozenset()
         self.anterior = lab
         p_base = puntajes_de_cambio(self.base, lab) if self.base is not None else None
         if entre_cuadros:  # algo se mueve (mano, pieza): se espera
-            self.estables = self.parciales = self.confirmaciones = self.sin_explicar = 0
+            self.estables = self.parciales = self.confirmaciones = self.sin_explicar = self.ruido = 0
             self.pendiente, self.congelado = None, False
             self._guardar_analisis(enderezada, p_base, frozenset(), entre_cuadros)
             return self._respuesta("moviendo", "Hay movimiento en el tablero: esperando que quede quieto…", entre_cuadros)
@@ -409,7 +451,7 @@ class Seguimiento:
                     cambiadas = casillas_de_la_jugada(chess.Board(self.fen), evidencia.jugada)
         if not cambiadas:
             restaurada = self.estado in ("invalida", "incompleta", "dudosa")
-            self.parciales = self.confirmaciones = self.sin_explicar = 0
+            self.parciales = self.confirmaciones = self.sin_explicar = self.ruido = 0
             self.pendiente = None
             self.ultima_alerta = ""
             if not self.congelado:
@@ -451,10 +493,29 @@ class Seguimiento:
                 lo_que_falta = ", ".join(sorted(explicacion.faltan))
                 self.sin_explicar = 0
                 return self._respuesta("incompleta", f"Solo se ve cambio en {', '.join(sorted(cambiadas))}; falta confirmar {lo_que_falta}. Esperando la jugada completa…", cambiadas)
+        if len(cambiadas) >= CASILLAS_DESPLAZAMIENTO:
+            # Tantas casillas a la vez no son una jugada ni piezas volcadas: se movió el tablero o la cámara (o cambió la luz). Se rehace la foto base sola y se deja dicho.
+            self.sin_explicar += 1
+            if self.sin_explicar < self.ticks_invalida:
+                return self._respuesta("moviendo", "Hay cambios en el tablero: esperando que termine el movimiento…", cambiadas)
+            self._reiniciar_base()
+            self.aviso = "Parece que se movió el tablero o la cámara (cambiaron muchas casillas a la vez): se toma otra foto base. Revisá que las piezas sigan en su sitio."
+            return self._respuesta("tomando_base", self.aviso, frozenset(), vista=False)
+        indice = {nombre: i for i, nombre in enumerate(NOMBRES)}
+        if 0 < len(cambiadas) <= MAX_CASILLAS_RUIDO and max(float(p_base[indice[c]]) for c in cambiadas) < PUNTAJE_RUIDO:
+            # Un cambio leve que ninguna jugada explica (sombra, reflejo, una pieza movida un milímetro): se espera a que se sostenga y se ignora; no es una alerta de posición inválida.
+            self.ruido += 1
+            if self.ruido < self.ticks_ruido:
+                return self._respuesta("moviendo", "Cambio muy leve: confirmando que no sea una jugada…", cambiadas)
+            self.base, self.base_img = lab, enderezada
+            self.ruido = self.sin_explicar = self.parciales = 0
+            self.aviso = f"Se ignoró un cambio muy leve en {', '.join(sorted(cambiadas))} (sombra o reflejo)."
+            return self._respuesta("esperando", "Un cambio muy leve (sombra o reflejo) se ignoró. Esperando la próxima jugada.", frozenset())
+        self.ruido = 0
         self.sin_explicar += 1
         if self.sin_explicar < self.ticks_invalida:  # una mano que se queda un momento sobre el tablero no es una alerta
             return self._respuesta("moviendo", "Hay cambios en el tablero: esperando que termine el movimiento…", cambiadas)
-        if len(cambiadas) >= 5 and self.sin_explicar >= self.ticks_sucia:
+        if len(cambiadas) >= 5 and self.sin_explicar >= self.ticks_sucia and self.edad <= self.ticks_edad_sucia:
             # Cinco casillas o más sin explicación durante varios segundos con el tablero quieto: no es una jugada, es una mano (o la luz) que quedó en la foto base.
             self._reiniciar_base()
             return self._respuesta("tomando_base", "La foto base parecía tener algo encima (la mano): se vuelve a tomar cuando el tablero esté quieto.", frozenset(), vista=False)
@@ -479,6 +540,7 @@ class Seguimiento:
 
     def _aceptar(self, tablero: chess.Board, explicacion: Explicacion, cambiadas: frozenset[str], lab: np.ndarray, enderezada: np.ndarray) -> dict:
         quien = _bando(tablero)
+        self.previa = (self.fen, self.base, self.base_img)
         self.historial.append((self.fen, explicacion.san))
         casillas_jugada = casillas_de_la_jugada(tablero, explicacion.jugada)  # antes de jugarla: el enroque y la captura al paso dependen de la posición
         tablero.push(explicacion.jugada)
@@ -509,9 +571,10 @@ class Seguimiento:
         self.estado = estado
         if vista and self.analisis is not None:
             self.analisis.update(estado=estado, decision=mensaje, jugada=jugada if jugada else self.analisis.get("jugada"))
+        aviso, self.aviso = self.aviso, ""
         return {
             "estado": estado, "mensaje": mensaje, "fen": self.fen, "jugada": jugada, "cambiadas": sorted(cambiadas),
-            "jugadas": list(self.jugadas), "turno": _bando(chess.Board(self.fen)), "puede_deshacer": bool(self.historial),
+            "jugadas": list(self.jugadas), "turno": _bando(chess.Board(self.fen)), "puede_deshacer": bool(self.historial), "aviso": aviso,
         }
 
 

@@ -416,8 +416,11 @@ def mover(
     reloj_blancas_ms: int | None = None,
     ejecutar_brazo: bool = True,
     coronar_solo_a_dama: bool = False,
+    analizar: bool = True,
 ) -> dict:
     """Aplica la jugada del humano (UCI) y responde con la jugada de la estrategia activa.
+
+    Con `analizar=False` no se corre Stockfish sobre la posición resultante ni se califica la jugada del humano (unos 0,9 s de CPU por jugada); por defecto sí, también en la partida física.
 
     Con `ejecutar_brazo=False` no manda la respuesta al brazo (quien llama la ejecuta aparte, p. ej. `partida_fisica`, que no puede bloquear unos 30 s).
     Con `coronar_solo_a_dama=True`, si la respuesta corona a otra pieza se corona a dama (el brazo solo tiene damas de reserva).
@@ -530,7 +533,7 @@ def mover(
     # y retroalimentación pedagógica en vivo (HU6)
     variantes_candidatas: list[dict] = []
     retroalimentacion_en_vivo: dict | None = None
-    if not partida.terminada and jugada_motor_san is not None:
+    if analizar and not partida.terminada and jugada_motor_san is not None:
         analisis = analizar_posicion(partida.fen, NIVEL_MAX, TIEMPO_ANALISIS_EN_VIVO)  # fuerza máxima: el nivel de la partida solo regula al rival
         variantes_candidatas = analisis.get("variantes_candidatas", [])
 
@@ -550,6 +553,88 @@ def mover(
         "error_brazo": error_brazo,
         "reloj": _estado_del_reloj(partida),
     }
+
+
+def corregir_posicion(partida_id: str, fen: str) -> Partida:
+    """Cambia la posición de la partida por `fen` (lo que de verdad hay sobre el tablero físico) y la sigue desde ahí: no se reinicia nada más (nivel, oponente, dueño).
+
+    El historial de jugadas vuelve a empezar en esa posición (`fen_inicial`); lo que falta en el tablero cuenta como retirado (las piezas ya están en el cementerio físico).
+
+    Raises:
+        KeyError: no existe la partida. ValueError: la partida terminó o `fen` no es una posición posible.
+    """
+    partida = obtener_partida(partida_id)
+    if partida.terminada:
+        raise ValueError("La partida ya terminó")
+    tablero = tablero_valido(fen)
+    partida.tablero = tablero
+    partida.fen_inicial = tablero.fen()
+    partida.tiempos_jugadas_ms = []
+    partida.actualizada_en = datetime.now(timezone.utc).isoformat()
+    _repositorio.guardar(partida)
+    return partida
+
+
+def tablero_valido(fen: str) -> chess.Board:
+    """El tablero de `fen`, comprobando que sea una posición posible (un rey por bando, sin peones en la primera o la última fila, sin demasiadas piezas, el que no mueve no está en jaque…).
+
+    Raises:
+        ValueError: con el motivo en español.
+    """
+    try:
+        tablero = chess.Board(fen)
+    except ValueError as error:
+        raise ValueError(f"Posición inválida: {error}") from error
+    estado = tablero.status()
+    if estado == chess.STATUS_VALID:
+        return tablero
+    motivos = {
+        chess.STATUS_NO_WHITE_KING: "falta el rey blanco", chess.STATUS_NO_BLACK_KING: "falta el rey negro", chess.STATUS_TOO_MANY_KINGS: "hay más de un rey por bando",
+        chess.STATUS_TOO_MANY_WHITE_PAWNS: "hay más de 8 peones blancos", chess.STATUS_TOO_MANY_BLACK_PAWNS: "hay más de 8 peones negros",
+        chess.STATUS_PAWNS_ON_BACKRANK: "hay un peón en la primera o la última fila", chess.STATUS_TOO_MANY_WHITE_PIECES: "hay más de 16 piezas blancas",
+        chess.STATUS_TOO_MANY_BLACK_PIECES: "hay más de 16 piezas negras", chess.STATUS_OPPOSITE_CHECK: "el bando que no mueve está en jaque",
+        chess.STATUS_TOO_MANY_CHECKERS: "hay un jaque imposible", chess.STATUS_IMPOSSIBLE_CHECK: "hay un jaque imposible", chess.STATUS_BAD_CASTLING_RIGHTS: "",
+        chess.STATUS_INVALID_EP_SQUARE: "", chess.STATUS_EMPTY: "el tablero está vacío",
+    }
+    dichos = [texto for bandera, texto in motivos.items() if estado & bandera and texto]
+    if dichos:
+        raise ValueError("Posición imposible: " + ", ".join(dichos))
+    # Solo derechos de enroque o captura al paso incoherentes: se arreglan solos, no es motivo para rechazar lo que la persona ve.
+    tablero.castling_rights = tablero.clean_castling_rights()
+    tablero.ep_square = None
+    return tablero
+
+
+def responder(partida_id: str, coronar_solo_a_dama: bool = False) -> dict:
+    """La jugada de la estrategia activa en la posición actual, SIN que antes haya jugado el humano: sirve cuando la posición se corrigió a mano y le toca a ella.
+
+    Raises:
+        KeyError: no existe la partida. ValueError: la partida terminó, no le toca a las negras o no hay jugada.
+    """
+    partida = obtener_partida(partida_id)
+    if partida.terminada:
+        raise ValueError("La partida ya terminó")
+    tablero = partida.tablero.copy()
+    if tablero.turn != chess.BLACK:
+        raise ValueError("No le toca a la estrategia (juegan las blancas)")
+    estrategia = crear_estrategia_jugada(partida.tipo_oponente, nivel=partida.nivel)
+    fen_antes = tablero.fen()
+    inicio = time.perf_counter()
+    jugada_san = estrategia.decidir_jugada(fen_antes)
+    tiempo_ms = int((time.perf_counter() - inicio) * 1000)
+    jugada = tablero.parse_san(jugada_san)
+    if coronar_solo_a_dama and jugada.promotion not in (None, chess.QUEEN):
+        jugada = chess.Move(jugada.from_square, jugada.to_square, promotion=chess.QUEEN)
+    jugada_san = tablero.san(jugada)
+    tablero.push(jugada)
+    partida.tiempos_jugadas_ms = (partida.tiempos_jugadas_ms + [None] * (len(tablero.move_stack) - 1))[: len(tablero.move_stack) - 1] + [tiempo_ms]
+    partida.tablero = tablero
+    partida.actualizada_en = datetime.now(timezone.utc).isoformat()
+    if partida.terminada:
+        partida.estado = "terminada"
+    _repositorio.guardar(partida)
+    _repositorio.registrar_jugada(partida.id, len(tablero.move_stack), fen_antes, jugada.uci(), partida.tipo_oponente)
+    return {"fen": partida.fen, "jugada_motor": jugada_san, "terminada": partida.terminada, "resultado": partida.resultado, "jugadas": partida.jugadas_san}
 
 
 def _estado_del_reloj(partida: Partida) -> dict | None:

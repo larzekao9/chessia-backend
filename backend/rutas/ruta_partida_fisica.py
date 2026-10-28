@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.rutas.ruta_auth import get_current_principal
-from backend.servicios.partida import partida_fisica
+from backend.servicios.partida import partida_fisica, preparacion
 
 router = APIRouter(prefix="/partida-fisica", tags=["partida-fisica"], dependencies=[Depends(get_current_principal)])
 
@@ -13,6 +13,19 @@ router = APIRouter(prefix="/partida-fisica", tags=["partida-fisica"], dependenci
 class IniciarPartidaFisicaRequest(BaseModel):
     partida_id: str
     camara: str = Field("principal", max_length=20)
+    tiempo_persona_s: int = Field(0, ge=0, le=7200)
+    """Reloj de la persona para toda la partida, en segundos (0 = sin límite)."""
+    tiempo_turing_s: int = Field(0, ge=0, le=7200)
+    """Reloj de Turing para toda la partida, en segundos (0 = sin límite; con los dos en 0 no hay reloj)."""
+    brazo_cuenta: bool = False
+    """Si el tiempo que tarda el brazo en mover se descuenta del reloj de Turing."""
+    ventana_s: float | None = Field(None, ge=0, le=5)
+    """Segundos para poder anular la jugada leída antes de que Turing la reciba (`None` = el valor de siempre)."""
+
+
+class PosicionRequest(BaseModel):
+    fen: str = Field(min_length=10, max_length=120)
+    """Cómo están de verdad las piezas sobre el tablero (FEN, con el turno de quien mueve)."""
 
 
 class JugadaManualRequest(BaseModel):
@@ -32,11 +45,20 @@ def _sesion() -> partida_fisica.PartidaFisica:
         raise HTTPException(status_code=409, detail="No hay una partida física iniciada") from error
 
 
+@router.get("/preparacion")
+def verificar_preparacion() -> dict:
+    """Lista de verificación antes de empezar (solo lectura: no mueve ni cambia nada del brazo): cámara calibrada, brazo conectado y habilitado, pinza, calibración y parámetros del brazo,
+    velocidad con que está, y que Turing y Stockfish respondan. `{listo, items: [{id, etiqueta, estado, detalle, brazo}]}`; `estado` es `ok`, `error`, `aviso` o `info`."""
+    return preparacion.verificar()
+
+
 @router.post("/iniciar")
 def iniciar(cuerpo: IniciarPartidaFisicaRequest) -> dict:
     """Empieza a seguir la partida en el tablero físico. 404 si no existe, 409 si la cámara no está calibrada, 422 si no se puede (terminó, es contra un humano)."""
     try:
-        return partida_fisica.iniciar(cuerpo.partida_id, cuerpo.camara)
+        return partida_fisica.iniciar(
+            cuerpo.partida_id, cuerpo.camara, ventana_s=cuerpo.ventana_s, tiempo_persona_s=cuerpo.tiempo_persona_s, tiempo_turing_s=cuerpo.tiempo_turing_s, brazo_cuenta=cuerpo.brazo_cuenta
+        )
     except KeyError as error:
         raise HTTPException(status_code=404, detail="La partida no existe") from error
     except ValueError as error:
@@ -75,6 +97,43 @@ def jugada_manual(cuerpo: JugadaManualRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=f"Jugada inválida: {error}") from error
+    return sesion.estado_actual()
+
+
+@router.post("/cancelar-lectura")
+def cancelar_lectura() -> dict:
+    """«¡No, era otra!»: anula la jugada recién leída antes de que Turing la reciba. 409 si ya no se puede."""
+    sesion = _sesion()
+    try:
+        sesion.cancelar_lectura()
+    except partida_fisica.Ocupado as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return sesion.estado_actual()
+
+
+@router.post("/posicion")
+def corregir_posicion(cuerpo: PosicionRequest) -> dict:
+    """Corrige la posición de la partida a la que hay de verdad sobre el tablero y sigue desde ahí (si mueven las negras, Turing responde). 409 si Turing o el brazo están moviendo, 422 si la posición es imposible."""
+    sesion = _sesion()
+    try:
+        sesion.corregir_posicion(cuerpo.fen)
+    except partida_fisica.Ocupado as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return sesion.estado_actual()
+
+
+@router.post("/foto-base")
+def retomar_foto_base() -> dict:
+    """Vuelve a tomar la foto base con el tablero como está ahora (las piezas ya coinciden con la partida pero la imagen no). 409 si el sistema está trabajando o no se espera una jugada, 422 si el seguimiento se detuvo."""
+    sesion = _sesion()
+    try:
+        sesion.retomar_foto_base()
+    except partida_fisica.Ocupado as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     return sesion.estado_actual()
 
 

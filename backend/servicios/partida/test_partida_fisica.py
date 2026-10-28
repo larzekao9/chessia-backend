@@ -313,3 +313,212 @@ def test_el_estado_de_la_partida_fisica_informa_el_rendimiento_sin_consultar_tab
     sesion = _empezar(mundo)
     datos = sesion.estado_actual()
     assert "referencia_vacia" not in datos and set(datos["rendimiento"]) == {"fps_camara", "formato", "ms_cuadro"}
+
+
+def _con_base_sucia(mundo, sesion: pf.PartidaFisica) -> str:
+    """La foto base posterior al brazo se toma con dos peones de menos (algo los tapaba) y después el tablero se ve completo: dos casillas «cambiadas» que ninguna jugada explica."""
+    fen = sesion._partida().fen
+    sucio = chess.Board(fen)
+    sucio.remove_piece_at(chess.E2)
+    sucio.remove_piece_at(chess.D2)
+    mundo.fisico = sucio.fen()
+    sesion._verificar()  # toma la base con el tablero sucio (como al terminar el brazo)
+    mundo.fisico = fen
+    return fen
+
+
+def test_una_base_sucia_tras_el_brazo_se_rehace_sola_una_vez(mundo) -> None:
+    sesion = _empezar(mundo)
+    _con_base_sucia(mundo, sesion)
+    for _ in range(14):
+        sesion.paso()
+    assert any("se vuelve a tomar" in e["texto"] for e in sesion.eventos)
+    assert sesion.ultimo_seguimiento["estado"] == "esperando" and sesion.estado == pf.ESPERANDO_HUMANO and not sesion.incidente
+    assert sum("se vuelve a tomar" in e["texto"] for e in sesion.eventos) == 1  # una sola vez
+
+
+def test_pasado_el_plazo_una_alerta_de_posicion_invalida_no_se_rehace_sola(mundo) -> None:
+    """Después del plazo la alerta es de la persona (una pieza movida de más): rehacer la base la daría por buena."""
+    sesion = _empezar(mundo)
+    _con_base_sucia(mundo, sesion)
+    sesion._cura_base_hasta = 0.0
+    for _ in range(14):
+        sesion.paso()
+    assert sesion.ultimo_seguimiento["estado"] == "invalida"
+    assert not any("se vuelve a tomar" in e["texto"] for e in sesion.eventos)
+
+
+def test_la_persona_puede_volver_a_tomar_la_foto_base_con_una_alerta_que_no_se_va(mundo) -> None:
+    sesion = _empezar(mundo)
+    _con_base_sucia(mundo, sesion)
+    sesion._cura_base_hasta = 0.0
+    for _ in range(14):
+        sesion.paso()
+    assert sesion.ultimo_seguimiento["estado"] == "invalida"
+    sesion.retomar_foto_base()
+    assert any("a pedido" in e["texto"] for e in sesion.eventos)
+    for _ in range(14):
+        sesion.paso()
+    assert sesion.ultimo_seguimiento["estado"] == "esperando" and sesion.estado == pf.ESPERANDO_HUMANO
+
+
+def test_la_foto_base_solo_se_vuelve_a_tomar_mientras_se_espera_una_jugada(mundo) -> None:
+    sesion = _empezar(mundo)
+    sesion._fijar(pf.INCIDENTE, "Incidente: prueba")
+    with pytest.raises(pf.Ocupado, match="se espera una jugada"):
+        sesion.retomar_foto_base()
+
+
+# --- lectura provisional de la jugada (ventana para cambiar de idea) --------------------------------------------------------------------------
+def _con_ventana(mundo, ventana: float = 5.0) -> pf.PartidaFisica:
+    sesion = _empezar(mundo)
+    sesion.ventana_s = ventana
+    return sesion
+
+
+def _pasar_la_ventana(sesion: pf.PartidaFisica) -> None:
+    sesion._lectura["inicio"] -= 100.0
+    sesion.paso()
+
+
+def test_la_jugada_leida_espera_la_ventana_antes_de_moverse_el_brazo(mundo) -> None:
+    sesion = _con_ventana(mundo)
+    _mover_a_mano(mundo, sesion, "e2e4")
+    assert sesion.estado == pf.LEYENDO and mundo.brazo == [] and sesion.estado_actual()["lectura"]["jugada"] == "e4"
+    assert sesion.estado_actual()["jugadas"] == []  # todavía no se aplicó
+    _pasar_la_ventana(sesion)
+    assert mundo.brazo == ["e5"] and sesion.estado == pf.ESPERANDO_HUMANO and sesion.estado_actual()["jugadas"] == ["e4", "e5"]
+
+
+def test_si_la_persona_cambia_la_pieza_durante_la_ventana_se_lee_de_nuevo(mundo) -> None:
+    sesion = _con_ventana(mundo)
+    _mover_a_mano(mundo, sesion, "e2e4")
+    assert sesion.estado == pf.LEYENDO
+    # cambia de idea: devuelve el peón y mueve el de d
+    tablero_fisico = chess.Board(chess.STARTING_FEN)
+    tablero_fisico.push_uci("d2d4")
+    mundo.fisico, mundo.mano = tablero_fisico.fen(), True
+    sesion.paso()
+    assert sesion.estado == pf.ESPERANDO_HUMANO and mundo.brazo == []
+    mundo.mano = False
+    for _ in range(10):
+        sesion.paso()
+    assert sesion.estado == pf.LEYENDO and sesion.estado_actual()["lectura"]["jugada"] == "d4"
+    _pasar_la_ventana(sesion)
+    assert sesion.estado_actual()["jugadas"] == ["d4", "e5"] and mundo.brazo == ["e5"]
+
+
+def test_el_boton_no_era_otra_anula_la_lectura_y_despues_ya_no_se_puede(mundo) -> None:
+    sesion = _con_ventana(mundo)
+    _mover_a_mano(mundo, sesion, "e2e4")
+    sesion.cancelar_lectura()
+    assert sesion.estado == pf.ESPERANDO_HUMANO and mundo.brazo == [] and sesion.estado_actual()["jugadas"] == []
+    with pytest.raises(pf.Ocupado, match="Ya no se puede anular"):
+        sesion.cancelar_lectura()
+    mundo.fisico = chess.STARTING_FEN  # la persona devuelve la pieza y juega otra cosa
+    mundo.mano = True
+    sesion.paso()
+    _mover_a_mano(mundo, sesion, "g1f3")
+    assert sesion.estado == pf.LEYENDO and sesion.estado_actual()["lectura"]["jugada"] == "Nf3"
+
+
+# --- corregir la posición sin reiniciar la partida --------------------------------------------------------------------------------------------
+def test_corregir_la_posicion_sigue_la_partida_sin_reiniciar(mundo) -> None:
+    sesion = _empezar(mundo)
+    mundo.respuestas = ["Nc6"]  # tras la posición corregida, Turing responde a Nf3
+    fisico = chess.Board(chess.STARTING_FEN)
+    fisico.push_uci("e2e4")
+    fisico.push_uci("e7e5")  # lo que hay de verdad sobre el tablero (por ejemplo, tras una lectura equivocada)
+    mundo.fisico = fisico.fen()
+    sesion.corregir_posicion(fisico.fen())
+    assert sesion.estado == pf.ESPERANDO_HUMANO and sesion.estado_actual()["fen"] == fisico.fen() and mundo.brazo == []
+    for _ in range(8):  # la foto base nueva, con el tablero quieto
+        sesion.paso()
+    _mover_a_mano(mundo, sesion, "g1f3")
+    assert mundo.brazo == ["Nc6"] and sesion.estado_actual()["jugadas"] == ["Nf3", "Nc6"]  # la partida siguió; las jugadas arrancan en la posición corregida
+
+
+def test_corregir_la_posicion_con_turno_de_turing_hace_que_responda(mundo) -> None:
+    sesion = _empezar(mundo)
+    fisico = chess.Board(chess.STARTING_FEN)
+    fisico.push_uci("e2e4")
+    mundo.fisico = fisico.fen()
+    sesion.corregir_posicion(fisico.fen())
+    assert mundo.brazo == ["e5"] and sesion.estado == pf.ESPERANDO_HUMANO and sesion.estado_actual()["jugadas"] == ["e5"]
+    assert len(sesion.ejecutadas) == 1  # el brazo hizo su jugada una sola vez, con el historial nuevo
+
+
+def test_corregir_la_posicion_rechaza_lo_imposible_y_no_interrumpe_al_brazo(mundo) -> None:
+    sesion = _empezar(mundo)
+    with pytest.raises(ValueError, match="rey"):
+        sesion.corregir_posicion("8/8/8/8/8/8/8/8 w - - 0 1")
+    sesion.estado = pf.BRAZO_EJECUTA
+    with pytest.raises(pf.Ocupado, match="terminen"):
+        sesion.corregir_posicion(chess.STARTING_FEN)
+
+
+# --- reloj ------------------------------------------------------------------------------------------------------------------------------------------
+class _Tiempo:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def test_el_reloj_descuenta_solo_al_que_tiene_el_turno() -> None:
+    tiempo = _Tiempo()
+    reloj = pf.Reloj(600, 180, ahora=tiempo)
+    reloj.correr("persona")
+    tiempo.t += 30
+    assert reloj.como_dict()["persona_ms"] == 570_000 and reloj.como_dict()["turing_ms"] == 180_000
+    reloj.correr("turing")
+    tiempo.t += 10
+    reloj.correr(None)
+    tiempo.t += 500  # parado: no descuenta
+    datos = reloj.como_dict()
+    assert datos["persona_ms"] == 570_000 and datos["turing_ms"] == 170_000 and datos["corre"] is None and reloj.agotado() is None
+    reloj.correr("persona")
+    tiempo.t += 600
+    assert reloj.agotado() == "persona"
+
+
+def test_un_lado_sin_limite_nunca_se_agota() -> None:
+    tiempo = _Tiempo()
+    reloj = pf.Reloj(None, 60, ahora=tiempo)
+    reloj.correr("persona")
+    tiempo.t += 99999
+    assert reloj.agotado() is None and reloj.como_dict()["persona_ms"] is None
+
+
+def test_el_reloj_de_la_partida_corre_segun_el_turno_y_el_brazo_no_cuenta_por_defecto(mundo, monkeypatch) -> None:
+    partida = servicio_partida.crear_partida(nivel=5, tipo_oponente="modelo")
+    partida.usa_brazo = True
+    mundo.fisico = partida.fen
+    pf.iniciar(partida.id, intervalo=0, con_hilo=False, tiempo_persona_s=600, tiempo_turing_s=180)
+    sesion = pf.sesion()
+    for _ in range(4):
+        sesion.paso()
+    assert sesion.reloj.corre == "persona"
+    viendo = []
+    original = servicio_brazo.ejecutar_jugada_fisica
+    monkeypatch.setattr(servicio_brazo, "ejecutar_jugada_fisica", lambda antes, jugada: (viendo.append(sesion.reloj.corre), original(antes, jugada)))
+    _mover_a_mano(mundo, sesion, "e2e4")
+    assert viendo == [None]  # mientras el brazo mueve no corre el reloj de nadie
+    assert sesion.reloj.corre == "persona"
+    sesion.pausar()
+    assert sesion.reloj.corre is None
+    sesion.reanudar()
+    assert sesion.reloj.corre == "persona"
+
+
+def test_al_agotarse_el_tiempo_la_partida_termina(mundo) -> None:
+    partida = servicio_partida.crear_partida(nivel=5, tipo_oponente="modelo")
+    mundo.fisico = partida.fen
+    pf.iniciar(partida.id, intervalo=0, con_hilo=False, tiempo_persona_s=600, tiempo_turing_s=180)
+    sesion = pf.sesion()
+    sesion.reloj.restante["persona"] = 0.0
+    sesion.paso()
+    datos = sesion.estado_actual()
+    assert sesion.estado == pf.FIN and datos["fin_tiempo"] == "persona" and datos["terminada"] and datos["resultado"] == "0-1"
+    assert "Turing" in sesion.mensaje

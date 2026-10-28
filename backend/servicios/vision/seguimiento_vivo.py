@@ -140,6 +140,18 @@ def fijar_base_inmediata(fen: str) -> dict:
         return {**_datos(seguimiento, camara), **resultado}
 
 
+def retroceder() -> bool:
+    """Deshace la jugada recién aceptada sin tomar otra foto base (ver `Seguimiento.retroceder`). `False` si no había nada que retroceder.
+
+    Raises:
+        SinSeguimiento: no hay seguimiento.
+    """
+    with _cerrojo:
+        if _actual is None:
+            raise SinSeguimiento()
+        return _actual.retroceder()
+
+
 def rebasar() -> dict:
     """Vuelve a tomar la foto base con la posición que ya se sabe (las piezas quedaron bien pero la imagen no coincide con la foto).
 

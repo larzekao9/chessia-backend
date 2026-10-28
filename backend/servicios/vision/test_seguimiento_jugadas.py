@@ -305,7 +305,7 @@ def test_con_poco_contraste_dos_jugadas_seguidas_de_cada_bando() -> None:
 # --- ritmo: mirar el tablero muchas veces por segundo -----------------------------------------------------------------------------------------
 def test_los_cuadros_quietos_se_ajustan_al_ritmo_con_que_se_mira() -> None:
     siempre = sj.ticks_para(1.0)
-    assert siempre == {"ticks_estable": 2, "ticks_confirmar": 2, "ticks_invalida": 2, "ticks_base": 2, "ticks_sucia": 4, "ticks_ajuste": 3, "ticks_parcial": 6}  # el ritmo de siempre
+    assert siempre == {"ticks_estable": 2, "ticks_confirmar": 2, "ticks_invalida": 2, "ticks_base": 2, "ticks_sucia": 4, "ticks_ajuste": 3, "ticks_parcial": 6, "ticks_ruido": 3, "ticks_edad_sucia": 12}  # el ritmo de siempre
     camara = sj.ticks_para(1 / 30)  # un cuadro de la cámara
     assert camara["ticks_estable"] == 4 and camara["ticks_base"] == 30  # 0,15 s quieto para una jugada; 1 s para la foto base
     assert camara["ticks_invalida"] == 45 and camara["ticks_sucia"] == 120 and camara["ticks_parcial"] == 180
@@ -385,3 +385,68 @@ def test_una_jugada_de_la_persona_justo_despues_de_la_foto_base_rapida_se_recono
     _correr(seg, [_frame(tras_e4, semilla=100)])  # base lista en un cuadro nuevo
     res = _correr(seg, [_frame(tras_e5, mano=True, semilla=200)] + [_frame(tras_e5, semilla=201 + i) for i in range(8)])
     assert seg.jugadas == ["e5"] and any(r["estado"] == "jugada" for r in res)
+
+
+def test_retroceder_vuelve_a_la_posicion_y_la_base_de_antes_de_la_jugada() -> None:
+    """La persona cambia la pieza justo después de soltarla: se deshace la lectura y la jugada se vuelve a leer contra la MISMA base."""
+    seg = sj.Seguimiento(ESQ)
+    inicio, tras_e4, tras_d4 = chess.STARTING_FEN, _posicion_tras("e2e4"), _posicion_tras("d2d4")
+    _correr(seg, [_frame(inicio, semilla=i) for i in range(1, 5)])
+    res = _correr(seg, [_frame(tras_e4, semilla=10 + i) for i in range(8)])
+    assert seg.jugadas == ["e4"] and any(r["estado"] == "jugada" for r in res)
+    assert seg.retroceder() and seg.jugadas == [] and seg.fen == inicio and seg.estado == "moviendo"
+    assert not seg.retroceder()  # una sola vez por jugada
+    res = _correr(seg, [_frame(tras_d4, semilla=30 + i) for i in range(10)])
+    assert seg.jugadas == ["d4"] and seg.fen.split(" ")[0] == tras_d4.split(" ")[0]
+
+
+def test_un_tablero_desordenado_a_mitad_de_partida_no_se_toma_como_nueva_base() -> None:
+    """Varias piezas movidas o volcadas cuando la base ya no es nueva: se queda la alerta, no se rehace la base como si todo estuviera bien."""
+    seg = sj.Seguimiento(ESQ)
+    inicio = chess.STARTING_FEN
+    _correr(seg, [_frame(inicio, semilla=i) for i in range(1, 6)] + [_frame(inicio, semilla=20 + i) for i in range(seg.ticks_edad_sucia)])
+    desorden = chess.Board(inicio)
+    for origen, destino in (("a2", "a4"), ("c2", "c4"), ("g2", "g4")):
+        desorden.set_piece_at(chess.parse_square(destino), desorden.piece_at(chess.parse_square(origen)))
+        desorden.remove_piece_at(chess.parse_square(origen))
+    res = _correr(seg, [_frame(desorden.fen(), semilla=100 + i) for i in range(40)])
+    assert res[-1]["estado"] == "invalida" and seg.fen == inicio and all(r["estado"] != "tomando_base" for r in res)
+
+
+def _con_base(fen: str = chess.STARTING_FEN) -> sj.Seguimiento:
+    seg = sj.Seguimiento(ESQ, fen)
+    _correr(seg, [_frame(fen, semilla=i) for i in range(1, 7)])
+    return seg
+
+
+def _con_puntajes_falsos(monkeypatch, seg: sj.Seguimiento, casillas: dict[str, float]) -> None:
+    """Lo que se mide contra la foto base sale como `casillas`; lo que se mide entre cuadros consecutivos sigue siendo real (así «el tablero está quieto»)."""
+    real = sj.puntajes_de_cambio
+    forzado = np.zeros(64)
+    for nombre, valor in casillas.items():
+        forzado[sj.NOMBRES.index(nombre)] = valor
+    monkeypatch.setattr(sj, "puntajes_de_cambio", lambda antes, despues: forzado.copy() if antes is seg.base else real(antes, despues))
+
+
+def test_un_cambio_leve_sin_explicacion_se_ignora_y_no_da_posicion_invalida(monkeypatch) -> None:
+    """Dos casillas apenas sobre el umbral (una sombra, un reflejo): lo que tu cámara real daba una y otra vez como «posición inválida»."""
+    seg = _con_base()
+    _con_puntajes_falsos(monkeypatch, seg, {"h5": 17.0, "h6": 16.0})
+    res = _correr(seg, [_frame(chess.STARTING_FEN, semilla=30 + i) for i in range(20)])
+    assert all(r["estado"] != "invalida" for r in res) and any(r["aviso"] for r in res) and seg.jugadas == []
+    assert any("muy leve" in r["mensaje"] for r in res)
+
+
+def test_un_cambio_fuerte_sin_explicacion_sigue_siendo_posicion_invalida(monkeypatch) -> None:
+    seg = _con_base()
+    _con_puntajes_falsos(monkeypatch, seg, {"h5": 80.0, "h6": 75.0})
+    res = _correr(seg, [_frame(chess.STARTING_FEN, semilla=30 + i) for i in range(20)])
+    assert res[-1]["estado"] == "invalida" and not any(r["aviso"] for r in res)
+
+
+def test_si_se_mueve_el_tablero_o_la_camara_se_toma_otra_foto_base_y_se_avisa() -> None:
+    seg = _con_base()
+    corrido = np.roll(_frame(chess.STARTING_FEN, semilla=40), 40, axis=1)  # el tablero se corrió en la imagen: cambian casi todas las casillas
+    res = _correr(seg, [np.roll(_frame(chess.STARTING_FEN, semilla=50 + i), 40, axis=1) for i in range(40)])
+    assert any(r["estado"] == "tomando_base" and "se movió el tablero o la cámara" in r["aviso"] for r in res)
+    assert res[-1]["estado"] == "esperando" and seg.fen == chess.STARTING_FEN and seg.jugadas == [] and corrido is not None
