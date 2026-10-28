@@ -66,6 +66,8 @@ class UsuarioORM(Base):
     descripcion: Mapped[str | None] = mapped_column(nullable=True)
     tema: Mapped[str] = mapped_column(default="dia", server_default="dia", nullable=False)
     """Apariencia de la web: `dia`, `noche` o `automatico` (sigue el dispositivo)."""
+    paleta: Mapped[str] = mapped_column(default="clasico", server_default="clasico", nullable=False)
+    """Paleta personal de colores, independiente del modo día/noche."""
     # Tono con el que Turing le habla a los estudiantes de este facilitador
     # ('infantil' | 'estandar' | 'adultos') — ver docstring de
     # `ActualizarPerfilRequest.preset_ensenanza`: les llega a los jugadores

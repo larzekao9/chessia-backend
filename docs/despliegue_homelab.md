@@ -33,7 +33,7 @@ docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.homelab.yml
 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.homelab.yml up -d --no-deps --no-build web
 ```
 
-Solo se reemplaza el servicio web. La base y los volúmenes de videos, avatares y medallas conservan su instalación. Al arrancar, el backend agrega las columnas faltantes mediante `backend/database.py`; el cambio de apariencia añade `usuario.tema` con valor inicial `dia`.
+Solo se reemplaza el servicio web. La base y los volúmenes de videos, avatares y medallas conservan su instalación. Al arrancar, el backend agrega las columnas faltantes mediante `backend/database.py`; la apariencia añade `usuario.tema` con valor inicial `dia` y `usuario.paleta` con valor inicial `clasico`.
 
 ## Verificar y recuperar
 

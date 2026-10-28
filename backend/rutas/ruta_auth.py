@@ -151,6 +151,7 @@ def _a_respuesta(user, partidas_calibradas: int, con_desafio: bool = True) -> Us
         tutor_email=user.tutor_email,
         descripcion=user.descripcion,
         tema=user.tema,
+        paleta=user.paleta,
         preset_ensenanza=user.preset_ensenanza,
         diagnostico_completado=partidas_calibradas >= PARTIDAS_DIAGNOSTICO,
         partidas_calibradas=partidas_calibradas,

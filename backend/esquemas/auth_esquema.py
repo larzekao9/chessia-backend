@@ -108,6 +108,7 @@ class UsuarioResponse(BaseModel):
     tutor_email: str | None = None
     descripcion: str | None = None
     tema: Literal["dia", "noche", "automatico"] = "dia"
+    paleta: Literal["clasico", "oceano", "bosque", "atardecer", "uva"] = "clasico"
     preset_ensenanza: str | None = None
     diagnostico_completado: bool = False
     partidas_calibradas: int = 0
@@ -304,6 +305,7 @@ class ActualizarPerfilRequest(BaseModel):
     descripcion: str | None = Field(default=None, max_length=1000)
     preset_ensenanza: PresetEnsenanza | None = None
     tema: Literal["dia", "noche", "automatico"] = "dia"
+    paleta: Literal["clasico", "oceano", "bosque", "atardecer", "uva"] = "clasico"
     tutor_nombre: str | None = Field(default=None, max_length=100)
     tutor_telefono: str | None = Field(default=None, max_length=30)
     tutor_email: EmailStr | None = None

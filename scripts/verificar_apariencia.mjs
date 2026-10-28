@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as pausa } from 'node:timers/promises';
+import { PALETAS_APARIENCIA } from '../frontend/src/apariencia.js';
 
 const url = process.argv[2] || 'http://127.0.0.1:5174';
 const salida = resolve(process.argv[3] || '.tmp-apariencia');
@@ -43,6 +44,12 @@ async function evaluar(expression) {
   const r = await enviar('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw Error(r.exceptionDetails.text + ': ' + (r.exceptionDetails.exception?.description || expression));
   return r.result?.value;
+}
+
+async function recargar() {
+  await evaluar('window.__documentoAnterior=true');
+  await enviar('Page.reload');
+  await esperar(() => evaluar('!window.__documentoAnterior && Boolean(document.querySelector(\'button[aria-label*="Activar modo"]\'))'), 'montaje de la nueva página tras recargar');
 }
 
 function ensayo(usuario = null) {
@@ -135,6 +142,53 @@ async function elegir(modo) {
   await esperar(() => evaluar(`document.documentElement.dataset.modoApariencia === '${modo}' && !document.querySelector('[aria-label="Modo de apariencia"] button:disabled')`), `guardar ${modo}`);
 }
 
+async function elegirPaleta(paleta) {
+  await evaluar(`document.querySelector('button[aria-label="Paleta ${paleta.nombre}"]').click()`);
+  await esperar(() => evaluar(`document.documentElement.dataset.paleta === '${paleta.id}' && !document.querySelector('[aria-labelledby="titulo-paletas"] button:disabled')`), `guardar paleta ${paleta.id}`);
+}
+
+async function verificarPaletas(cuenta) {
+  await abrir(cuenta,1920);
+  await irPerfil();
+  for (const ancho of [360,768,1920]) {
+    await enviar('Emulation.setDeviceMetricsOverride',{width:ancho,height:900,deviceScaleFactor:1,mobile:ancho<500});
+    for (const paleta of PALETAS_APARIENCIA) {
+      await elegirPaleta(paleta);
+      const colores=[];
+      for (const modo of ['dia','noche']) {
+        await elegir(modo);
+        await pausa(450);
+        assert.equal(await evaluar('document.documentElement.dataset.paleta'),paleta.id,'El modo no debe cambiar los colores elegidos');
+        await comprobarLegibilidad('[aria-labelledby="titulo-paletas"] button, [aria-label="Modo de apariencia"] button');
+        await comprobarAncho();
+        colores.push(await evaluar('getComputedStyle(document.documentElement).getPropertyValue("--color-primary").trim()'));
+        await evaluar('document.querySelector("#titulo-paletas").scrollIntoView({block:"center"})');
+        await capturar(`paleta-${cuenta.rol}-${paleta.id}-${modo}-${ancho}`);
+      }
+      assert.notEqual(colores[0],colores[1],'El acento debe adaptarse al modo');
+    }
+  }
+  await elegir('automatico');
+  const pedidos=await evaluar('window.__pedidosTema.length');
+  for (const oscuro of [true,false]) {
+    await enviar('Emulation.setEmulatedMedia',{features:[{name:'prefers-color-scheme',value:oscuro?'dark':'light'}]});
+    await esperar(() => evaluar(`document.documentElement.dataset.tema === '${oscuro?'noche':'dia'}'`),'modo automático con paleta');
+    assert.equal(await evaluar('document.documentElement.dataset.paleta'),'uva');
+  }
+  assert.equal(await evaluar('window.__pedidosTema.length'),pedidos,'El modo automático no debe guardar otra vez la paleta');
+  await recargar();
+  await esperar(() => evaluar('document.documentElement.dataset.paleta === "uva"'),'recordar paleta al recargar');
+  await irPerfil();
+  await evaluar('window.__fallarTema=true');
+  await elegirPaleta(PALETAS_APARIENCIA.find(p=>p.id==='bosque'));
+  await esperar(() => evaluar('document.body.textContent.includes("no se pudo guardar en tu cuenta")'),'avisar el fallo al guardar paleta');
+  await evaluar('window.__fallarTema=false; Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Reintentar").click()');
+  await esperar(() => evaluar('!document.body.textContent.includes("no se pudo guardar en tu cuenta")'),'reintentar paleta');
+  await recargar();
+  await esperar(() => evaluar('document.documentElement.dataset.paleta === "bosque"'),'conservar paleta tras reintentar');
+  console.log('Paletas de '+cuenta.rol+': cinco colores en día/noche, 360/768/1920, automático, recarga y reintento correctos.');
+}
+
 async function irPerfil() {
   await esperar(() => evaluar(`Array.from(document.querySelectorAll('button')).some(b => b.textContent.includes('Mi Perfil'))`), 'menú del perfil');
   await evaluar(`Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Mi Perfil')).click()`);
@@ -181,6 +235,7 @@ async function verificarVista(nombre, selectorLegibilidad) {
       muestra.remove(); return resultado;
     })()`);
     assert.equal(colores.modo, tema === 'dia' ? 'light' : 'dark');
+    assert.ok(await evaluar('document.documentElement.dataset.paleta === (window.__cuentaEnsayo?.paleta || "clasico")'), 'La navegación debe conservar la paleta de la cuenta');
     assert.notEqual(colores.fondo, colores.texto);
     if (tema === 'dia') assert.equal(colores.texto, 'rgb(23, 45, 54)');
     else assert.equal(colores.texto, 'rgb(226, 226, 235)');
@@ -191,6 +246,8 @@ async function verificarVista(nombre, selectorLegibilidad) {
 }
 
 async function comprobarLegibilidad(selector) {
+  // Chrome sin interfaz puede aplazar cuadros: se mide el color final, después de las transiciones.
+  await evaluar('document.getAnimations().filter(a=>a.effect?.getTiming().iterations!==Infinity).forEach(a=>a.finish())');
   const textos = await evaluar(`(() => {
     const contexto = document.createElement('canvas').getContext('2d', {willReadFrequently:true});
     function rgba(color) {
@@ -210,7 +267,7 @@ async function comprobarLegibilidad(selector) {
       const texto = superponer(rgba(estilo.color),fondo);
       const a = luminancia(texto), b = luminancia(fondo);
       const nombre = elemento.querySelector('.truncate') || elemento;
-      return {texto:elemento.textContent.trim(),contraste:(Math.max(a,b)+0.05)/(Math.min(a,b)+0.05),ancho:nombre.getBoundingClientRect().width};
+      return {texto:elemento.textContent.trim(),contraste:(Math.max(a,b)+0.05)/(Math.min(a,b)+0.05),ancho:nombre.getBoundingClientRect().width,color:estilo.color,fondo,apariencia:document.documentElement.dataset.tema+'/'+document.documentElement.dataset.paleta};
     });
   })()`);
   assert.ok(textos.length > 0, `Debe haber textos para ${selector}`);
@@ -275,7 +332,7 @@ try {
   await capturar('login-noche-360');
   console.log('Login: día/noche y ancho 360, correctos.');
 
-  const cuenta = { id: 7001, email: 'ensayo@example.com', nombre: 'Jugador de ensayo', rol: 'jugador', tema: 'noche', edad: 22, nivel_estimado: 5, rango_estimado: 'Principiante', diagnostico_completado: true, partidas_calibradas: 3, activo: true, correo_verificado: true, tiene_password: true };
+  const cuenta = { id: 7001, email: 'ensayo@example.com', nombre: 'Jugador de ensayo', rol: 'jugador', tema: 'noche', paleta: 'clasico', edad: 22, nivel_estimado: 5, rango_estimado: 'Principiante', diagnostico_completado: true, partidas_calibradas: 3, activo: true, correo_verificado: true, tiene_password: true };
   await abrir(cuenta, 1920);
   assert.equal(await evaluar('document.documentElement.dataset.tema'), 'noche');
   await irPerfil();
@@ -291,7 +348,7 @@ try {
     await esperar(() => evaluar(`document.documentElement.dataset.tema === '${oscuro ? 'noche' : 'dia'}'`), 'seguir el sistema');
   }
   assert.equal(await evaluar('window.__pedidosTema.length'), pedidos, 'Cambiar el sistema no debe hacer peticiones al backend');
-  await enviar('Page.reload');
+  await recargar();
   await esperar(() => evaluar('document.documentElement.dataset.modoApariencia === "automatico"'), 'recordar la elección');
   await irPerfil();
   await elegir('noche');
@@ -312,8 +369,13 @@ try {
   await esperar(() => evaluar('document.body.textContent.includes("no se pudo guardar en tu cuenta")'), 'avisar el fallo de sincronización');
   await evaluar('window.__fallarTema = false; Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Reintentar").click()');
   await esperar(() => evaluar('!document.body.textContent.includes("no se pudo guardar en tu cuenta")'), 'reintentar el guardado');
-  await abrir({ ...cuenta, id: 7002, nombre: 'Otro jugador', tema: 'dia' }, 360);
+  if (process.argv.includes('--paletas')) {
+    await verificarPaletas({...cuenta,id:7040});
+    await verificarPaletas({...cuenta,id:7041,rol:'facilitador',nombre:'Docente de ensayo',es_principal:true,doble_factor_activo:true});
+  }
+  await abrir({ ...cuenta, id: 7002, nombre: 'Otro jugador', tema: 'dia',paleta:process.argv.includes('--paletas')?'uva':'clasico' }, 360);
   assert.equal(await evaluar('document.documentElement.dataset.tema'), 'dia');
+  assert.equal(await evaluar('document.documentElement.dataset.paleta'),process.argv.includes('--paletas')?'uva':'clasico');
   await verificarAnalisis('jugador');
   await abrirMenu('Panel de Aprendizaje');
   await evaluar(`document.querySelector('button[aria-controls="panel-repaso"]').click()`);
@@ -341,7 +403,7 @@ try {
   await evaluar(`document.querySelector('button[aria-label="Cerrar el detalle de la figurita"]').click()`);
   console.log('Videos, álbum y detalle de medallas con datos cargados: correctos.');
 
-  await abrir({ ...cuenta, id: 7003, rol: 'facilitador', nombre:'Docente de ensayo', tema:'dia', es_principal:true, doble_factor_activo:true }, 1920);
+  await abrir({ ...cuenta, id: 7003, rol: 'facilitador', nombre:'Docente de ensayo', tema:'dia',paleta:process.argv.includes('--paletas')?'bosque':'clasico', es_principal:true, doble_factor_activo:true }, 1920);
   await abrirMenu('Partidas');
   await verificarAnalisis('facilitador');
   await abrirMenu('Enseñanza');
@@ -358,7 +420,7 @@ try {
 
   // Se recorren las vistas de ambos perfiles con API simulada; se comprueba que el tema global llega a cada montaje.
   if (!process.argv.includes('--breve')) {
-  await abrir({ ...cuenta, id: 7010, tema: 'dia' }, 1920);
+  await abrir({ ...cuenta, id: 7010, tema: 'dia',paleta:process.argv.includes('--paletas')?'atardecer':'clasico' }, 1920);
   await esperar(() => evaluar('Boolean(document.querySelector("aside nav"))'), 'menú del jugador');
   for (const etiqueta of ['Sala de Control', 'Panel de Aprendizaje', 'Jugar con otros', 'Mi aula', 'Mi Perfil', 'Registro de Partidas', 'Análisis Jugada a Jugada']) {
     await abrirMenu(etiqueta);
@@ -370,7 +432,7 @@ try {
     await verificarVista(`jugador-360-${etiqueta.replaceAll(' ', '-')}`);
   }
   console.log('Pestañas de jugador en escritorio y celular: correctas.');
-  const facilitador = { ...cuenta, id: 7020, rol: 'facilitador', nombre: 'Facilitador de ensayo', es_principal: true, doble_factor_activo: true, tema: 'dia' };
+  const facilitador = { ...cuenta, id: 7020, rol: 'facilitador', nombre: 'Facilitador de ensayo', es_principal: true, doble_factor_activo: true, tema: 'dia',paleta:process.argv.includes('--paletas')?'oceano':'clasico' };
   await abrir(facilitador, 1920);
   await esperar(() => evaluar('Boolean(document.querySelector("aside nav"))'), 'menú del facilitador');
   for (const grupo of ['Partidas', 'Enseñanza', 'Plataforma', 'Brazo y modelo']) await abrirMenu(grupo);
@@ -392,7 +454,7 @@ try {
     await verificarVista(`facilitador-360-${etiqueta.replaceAll(' ', '-')}`);
   }
   console.log('Pestañas de plataforma en escritorio y celular: correctas.');
-  await abrir({ ...facilitador, id: 7030, es_principal: false, es_admin_institucion: true, institucion: {id: 1, nombre: 'Institución de ensayo', tipo:'academia', es_prueba: false} }, 1920);
+  await abrir({ ...facilitador, id: 7030, es_principal: false, es_admin_institucion: true,paleta:process.argv.includes('--paletas')?'bosque':'clasico', institucion: {id: 1, nombre: 'Institución de ensayo', tipo:'academia', es_prueba: false} }, 1920);
   await abrirMenu('Enseñanza');
   for (const etiqueta of ['Mis cursos', 'Mi institución', 'Mi suscripción']) {
     await abrirMenu(etiqueta);

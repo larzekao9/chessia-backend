@@ -120,6 +120,7 @@ _COLUMNAS_AGREGADAS: dict[str, dict[str, str]] = {
         "edad": "INTEGER",
         "descripcion": "VARCHAR",
         "tema": "VARCHAR NOT NULL DEFAULT 'dia'",
+        "paleta": "VARCHAR NOT NULL DEFAULT 'clasico'",
         "preset_ensenanza": "VARCHAR",
         "institucion_id": "INTEGER",
         "correo_verificado": "BOOLEAN NOT NULL DEFAULT TRUE",

@@ -105,8 +105,14 @@ def test_base_anterior_recibe_el_tema_dia_sin_perder_perfiles() -> None:
     crear_tablas(motor)
     crear_tablas(motor)  # El segundo arranque no vuelve a agregar ni sobrescribir la preferencia.
     with motor.connect() as conexion:
-        fila = conexion.execute(text("SELECT nombre, tema FROM usuario WHERE id = 1")).one()
-    assert fila.nombre == "Alumno" and fila.tema == "dia"
+        fila = conexion.execute(text("SELECT nombre, tema, paleta FROM usuario WHERE id = 1")).one()
+    assert fila.nombre == "Alumno" and fila.tema == "dia" and fila.paleta == "clasico"
+    with motor.begin() as conexion:
+        conexion.execute(text("UPDATE usuario SET tema = 'noche', paleta = 'uva' WHERE id = 1"))
+    crear_tablas(motor)
+    with motor.connect() as conexion:
+        fila = conexion.execute(text("SELECT tema, paleta FROM usuario WHERE id = 1")).one()
+    assert fila.tema == "noche" and fila.paleta == "uva"
 
 
 def test_diccionario_de_datos_describe_todas_las_tablas_y_columnas() -> None:

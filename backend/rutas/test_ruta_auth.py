@@ -212,19 +212,48 @@ def test_patch_me_guarda_preset_ensenanza(cliente) -> None:
 
 
 @pytest.mark.parametrize("tema", ["dia", "noche", "automatico"])
-def test_apariencia_se_guarda_en_la_cuenta_y_vuelve_en_el_login(cliente, tema) -> None:
+@pytest.mark.parametrize("paleta", ["clasico", "oceano", "bosque", "atardecer", "uva"])
+def test_apariencia_se_guarda_en_la_cuenta_y_vuelve_en_el_login(cliente, tema, paleta) -> None:
     registro = cliente.post("/auth/registro", json=JUGADOR).json()
     assert registro["usuario"]["tema"] == "dia"
+    assert registro["usuario"]["paleta"] == "clasico"
     headers = {"Authorization": f"Bearer {registro['tokens']['access_token']}"}
-    respuesta = cliente.patch("/auth/me", json={"tema": tema}, headers=headers)
+    respuesta = cliente.patch("/auth/me", json={"tema": tema, "paleta": paleta}, headers=headers)
     assert respuesta.status_code == 200
     assert respuesta.json()["tema"] == tema
+    assert respuesta.json()["paleta"] == paleta
     assert cliente.get("/auth/me", headers=headers).json()["tema"] == tema
+    assert cliente.get("/auth/me", headers=headers).json()["paleta"] == paleta
     # Otra edición del perfil no restaura el modo día.
     assert cliente.patch("/auth/me", json={"descripcion": "Mi perfil"}, headers=headers).json()["tema"] == tema
+    assert cliente.get("/auth/me", headers=headers).json()["paleta"] == paleta
     login = cliente.post("/auth/login", json={"email": JUGADOR["email"], "password": JUGADOR["password"]})
     assert login.status_code == 200
     assert login.json()["usuario"]["tema"] == tema
+    assert login.json()["usuario"]["paleta"] == paleta
+
+
+@pytest.mark.parametrize("paleta", [None, "rojo", "", {"color": "uva"}])
+def test_paleta_invalida_no_modifica_el_tema_ni_los_colores(cliente, paleta) -> None:
+    registro = cliente.post("/auth/registro", json=JUGADOR).json()
+    headers = {"Authorization": f"Bearer {registro['tokens']['access_token']}"}
+    cliente.patch("/auth/me", json={"tema": "noche", "paleta": "bosque"}, headers=headers)
+    assert cliente.patch("/auth/me", json={"paleta": paleta}, headers=headers).status_code == 422
+    perfil = cliente.get("/auth/me", headers=headers).json()
+    assert perfil["tema"] == "noche" and perfil["paleta"] == "bosque"
+
+
+def test_paleta_y_modo_se_editan_por_separado_y_no_afectan_a_otra_cuenta(cliente) -> None:
+    uno = cliente.post("/auth/registro", json=JUGADOR).json()
+    dos = cliente.post("/auth/registro", json={**JUGADOR, "email": "otro@test.com"}).json()
+    headers = {"Authorization": f"Bearer {uno['tokens']['access_token']}"}
+    cliente.patch("/auth/me", json={"paleta": "uva"}, headers=headers)
+    perfil = cliente.patch("/auth/me", json={"tema": "noche"}, headers=headers).json()
+    assert perfil["tema"] == "noche" and perfil["paleta"] == "uva"
+    perfil = cliente.patch("/auth/me", json={"paleta": "oceano"}, headers=headers).json()
+    assert perfil["tema"] == "noche" and perfil["paleta"] == "oceano"
+    otro = cliente.get("/auth/me", headers={"Authorization": f"Bearer {dos['tokens']['access_token']}"}).json()
+    assert otro["tema"] == "dia" and otro["paleta"] == "clasico"
 
 
 @pytest.mark.parametrize("tema", [None, "sepia", "", {"modo": "dia"}])
