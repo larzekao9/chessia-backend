@@ -12,6 +12,8 @@ venv
 **/*.pyc
 **/.env
 **/.env.*
+!frontend/.env
+!frontend/.env.*
 **/*.db
 **/*.log
 **/node_modules

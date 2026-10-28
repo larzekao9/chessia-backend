@@ -10,6 +10,8 @@ WORKDIR /frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ .
+ARG VITE_GOOGLE_CLIENT_ID=623113372628-h3f7gf1kkqdd016lr47jq7s496u7sjfb.apps.googleusercontent.com
+ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
 FROM python:3.12-slim

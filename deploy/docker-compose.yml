@@ -26,6 +26,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-623113372628-h3f7gf1kkqdd016lr47jq7s496u7sjfb.apps.googleusercontent.com}
     container_name: ajedrez_web
     environment:
       DATABASE_URL: postgresql+psycopg2://ajedrez:${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en deploy/.env}@db:5432/ajedrez
