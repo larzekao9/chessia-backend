@@ -244,6 +244,7 @@ def parametros() -> dict:
         "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
         "cementerio_origen": agarre.cementerio_origen, "cementerio_paso": agarre.cementerio_paso, "cementerio_paso_fila": agarre.cementerio_paso_fila,
         "cementerio_columnas": agarre.cementerio_columnas, "cementerio_por_piezas": agarre.cementerio_por_piezas, "cementerio_peones_por_fila": agarre.cementerio_peones_por_fila, "reservas": dict(agarre.reservas),
+        "cementerio_lugares": dict(agarre.cementerio_lugares),
         "cementerio_jugador_origen": agarre.cementerio_jugador_origen, "cementerio_jugador_paso": agarre.cementerio_jugador_paso, "cementerio_jugador_paso_fila": agarre.cementerio_jugador_paso_fila,
         "desnivel_cementerio_mm": agarre.desnivel_cementerio_mm, "holgura_cementerio_mm": agarre.holgura_cementerio_mm,
     }
@@ -251,6 +252,17 @@ def parametros() -> dict:
 
 def _es_par(valor) -> bool:
     return isinstance(valor, (list, tuple)) and len(valor) == 2 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in valor)
+
+
+def _es_lugar_de_cementerio(lugar) -> bool:
+    """`cementerio:K` o `cementerio_jugador:K` con K de 0 a 71."""
+    if not isinstance(lugar, str):
+        return False
+    for prefijo in ("cementerio:", "cementerio_jugador:"):
+        if lugar.startswith(prefijo):
+            numero = lugar[len(prefijo):]
+            return numero.isdigit() and int(numero) < CASILLAS_CEMENTERIO
+    return False
 
 
 def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
@@ -302,6 +314,9 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
         elif clave == "cementerio_por_piezas":
             if not isinstance(valor, bool):
                 raise ErrorControl(422, "cementerio_por_piezas tiene que ser verdadero o falso")
+        elif clave == "cementerio_lugares":
+            if not isinstance(valor, dict) or any(not _es_lugar_de_cementerio(k) or not _es_par(v) for k, v in valor.items()):
+                raise ErrorControl(422, "cementerio_lugares: {\"cementerio:K\" o \"cementerio_jugador:K\": [x, y] en mm}")
         elif clave == "reservas":
             if not isinstance(valor, dict) or any(k not in ("dama_blanca", "dama_negra", "torre_blanca", "torre_negra", "alfil_blanco", "alfil_negro", "caballo_blanco", "caballo_negro") or not _es_par(v) for k, v in valor.items()):
                 raise ErrorControl(422, "reservas: dama, torre, alfil o caballo (_blanca o _negra), cada una [x, y] en mm")
@@ -315,6 +330,8 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
     for k in ("fuerza", "apertura_aproximacion", "apertura_extra_soltar", "velocidad_pinza", "velocidad_global", "aceleracion", "velocidad", "velocidad_bajada", "aceleracion_bajada"):
         if k in campos_agarre:
             campos_agarre[k] = int(campos_agarre[k])
+    if "cementerio_peones_por_fila" in campos_agarre and campos_agarre["cementerio_peones_por_fila"] != ejecutor.parametros.cementerio_peones_por_fila:
+        campos_agarre.setdefault("cementerio_lugares", {})  # cambia qué número de lugar le toca a cada pieza: lo enseñado ya no corresponde
     ejecutor.parametros = dataclasses.replace(ejecutor.parametros, **campos_agarre)
     ejecutor.pinza.fuerza, ejecutor.pinza.velocidad = ejecutor.parametros.fuerza, ejecutor.parametros.velocidad_pinza
     try:
@@ -985,18 +1002,30 @@ def cementerio_soltar(guardar: bool = True, guardar_altura: bool = False) -> dic
         raise ErrorControl(409, "El brazo no tiene ninguna pieza en la mano para soltar («Tomar y llevar» primero)")
     p = ejecutor.parametros
     cambios: dict = {}
+    mostrados: dict = {}
     if guardar or guardar_altura:
         pose = _leer_pose(ejecutor)
         try:
             if guardar:
                 origen = p.cementerio_jugador_origen if zona == "jugador" else p.cementerio_origen
                 paso = p.cementerio_jugador_paso if zona == "jugador" else p.cementerio_paso
-                cambios.update(ajuste_cementerio.cambios_para(zona, fila, columna, origen, paso, pose[0], pose[1]))
+                if fila == 0 and columna == 0:
+                    cambios.update(ajuste_cementerio.cambios_para(zona, fila, columna, origen, paso, pose[0], pose[1]))
+                else:
+                    try:  # la cuadrícula (para los lugares que todavía no se enseñaron) se acomoda si el paso sale razonable; si no, igual vale el lugar enseñado
+                        cambios.update(ajuste_cementerio.cambios_para(zona, fila, columna, origen, paso, pose[0], pose[1]))
+                    except ValueError:
+                        pass
+                # Este lugar queda exactamente donde se soltó: enseñar después otra pieza (que recalcula la cuadrícula) no lo corre.
+                punto = [round(pose[0], 1), round(pose[1], 1)]
+                cambios["cementerio_lugares"] = {**p.cementerio_lugares, lugar: punto}
+                mostrados[lugar] = punto
             if guardar_altura:
                 cambios["desnivel_cementerio_mm"] = ajuste_cementerio.desnivel_para(p.z_agarre_para(tipo), p.holgura_cementerio_mm, pose[2])
         except ValueError as error:
             raise ErrorControl(422, str(error)) from error
         _guardar_parametros_del_ejecutor(ejecutor, **cambios)
+        mostrados.update({c: v for c, v in cambios.items() if c != "cementerio_lugares"})
     cero = ejecutor.angulos_cero
 
     def accion(cliente) -> None:
@@ -1007,7 +1036,7 @@ def cementerio_soltar(guardar: bool = True, guardar_altura: bool = False) -> dic
             cliente.mover_a_angulos(tuple(cero))
 
     respuesta = _lanzar_manual(f"Soltar la pieza en {lugar}", accion)
-    return {"lugar": lugar, "cambios": cambios, **respuesta}
+    return {"lugar": lugar, "cambios": mostrados, **respuesta}
 
 
 def mover_relativo(dx: float = 0.0, dy: float = 0.0, dz: float = 0.0, velocidad_mm_s: int = 20) -> dict:

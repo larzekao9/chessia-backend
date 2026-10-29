@@ -194,6 +194,21 @@ def test_ejecutor_real_con_captura_retira_primero_la_pieza_capturada_al_cementer
     assert [l for l in historial if l[0] == "pinza_cerrar"] and len([l for l in historial if l[0] == "pinza_cerrar"]) == 2
 
 
+def test_ejecutor_real_en_partida_deja_la_pieza_en_el_lugar_ensenado_del_cementerio_ordenado():
+    import dataclasses
+
+    parametros = dataclasses.replace(
+        PARAMETROS_COMPLETOS, cementerio_por_piezas=True, cementerio_lugares={"cementerio:9": [950.0, 75.0]}
+    )  # el caballo 2 del cementerio del brazo se enseñó ahí, fuera de la cuadrícula
+    ejecutor, historial = _ejecutor(parametros)
+    tablero_antes = chess.Board("4k3/8/8/3n4/5N2/8/8/4K3 b - - 0 1")  # a las blancas ya les falta un caballo: el capturado es el segundo
+
+    ejecutor.ejecutar_movimiento(tablero_antes, tablero_antes.parse_uci("d5f4"))
+
+    assert _destinos_en_xy(historial)[1] == (950.0, 75.0)  # el caballo blanco capturado va al lugar enseñado, no al de la cuadrícula
+    assert ejecutor._xy("cementerio:8") != (950.0, 75.0)  # los no enseñados siguen saliendo de la cuadrícula
+
+
 def test_ejecutor_real_enroque_mueve_el_rey_y_despues_la_torre():
     ejecutor, historial = _ejecutor(PARAMETROS_COMPLETOS)
     tablero_antes = chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1")
@@ -212,6 +227,28 @@ def test_ejecutor_real_corona_con_la_dama_de_reserva():
 
     p = ejecutor.posiciones_casillas
     assert _destinos_en_xy(historial) == [p["a7"][:2], ejecutor._xy("cementerio:29"), (900.0, 200.0), p["a8"][:2]]  # el peón al cementerio y la dama de reserva a a8
+
+
+def test_ejecutor_real_sin_dama_de_reserva_trae_de_vuelta_el_peon_que_dejo_en_el_cementerio():
+    ejecutor, historial = _ejecutor(PARAMETROS_COMPLETOS)
+    cierres = iter([True, False, False, True])  # agarra el peón; la dama no está (y el reintento tampoco); vuelve a agarrar el peón
+    cerrar_original = ejecutor.pinza.cerrar
+
+    def cerrar():
+        ejecutor.pinza.hay_pieza = next(cierres)
+        return cerrar_original()
+
+    ejecutor.pinza.cerrar = cerrar
+    ejecutor.reintentos_agarre = 1
+    tablero_antes = chess.Board("8/P6k/8/8/8/8/8/K7 w - - 0 1")
+
+    ejecutor.ejecutar_movimiento(tablero_antes, tablero_antes.parse_uci("a7a8q"))
+
+    p = ejecutor.posiciones_casillas
+    lugar_del_peon = ejecutor._xy("cementerio:29")
+    destinos = _destinos_en_xy(historial)
+    assert destinos[:2] == [p["a7"][:2], lugar_del_peon]
+    assert destinos[-2:] == [lugar_del_peon, p["a8"][:2]]  # el peón vuelve del cementerio a a8 y queda como dama
 
 
 def test_ejecutor_real_sin_cementerio_calibrado_no_mueve_nada_en_una_captura():

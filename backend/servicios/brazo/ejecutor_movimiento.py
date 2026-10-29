@@ -174,6 +174,9 @@ class EjecutorReal(EjecutorMovimiento):
         Raises:
             RuntimeError: si el cementerio o la reserva no están calibrados.
         """
+        if lugar in self.parametros.cementerio_lugares:  # un lugar enseñado con una pieza real gana a la cuadrícula
+            x, y = self.parametros.cementerio_lugares[lugar]
+            return x, y
         if lugar.startswith(PREFIJO_CEMENTERIO):
             p = self.parametros
             if p.cementerio_origen is None:
@@ -295,7 +298,12 @@ class EjecutorReal(EjecutorMovimiento):
         """
         if self.posiciones_casillas is None or self.orientacion is None:
             raise RuntimeError("Falta la calibración del tablero o la orientación de la herramienta.")
-        for paso in pasos:  # todo lo que haga falta tiene que estar listo antes de mover la primera pieza
+        alternativas = []
+        for paso in pasos:
+            while paso.si_falla is not None:
+                paso = paso.si_falla
+                alternativas.append(paso)
+        for paso in pasos + alternativas:  # todo lo que haga falta tiene que estar listo antes de mover la primera pieza
             self.parametros.z_agarre_para(paso.pieza)
             self.parametros.apertura_para(paso.pieza)
             self._xy(paso.origen)
@@ -304,7 +312,14 @@ class EjecutorReal(EjecutorMovimiento):
         if not self.pinza.estado().inicializada:
             raise RuntimeError("La pinza no está inicializada: llamá a conectar() o a pinza.inicializar() antes de mover piezas.")
         for paso in pasos:
-            self._trasladar(paso)
+            while True:
+                try:
+                    self._trasladar(paso)
+                    break
+                except PiezaNoAgarrada as error:
+                    if paso.si_falla is None or not error.reintentable:
+                        raise
+                    paso = paso.si_falla  # p. ej. no estaba esa pieza de repuesto: prueba la siguiente y, al final, trae el peón que dejó en el cementerio
         if self.angulos_cero is not None:
             self.cliente.mover_a_angulos(self.angulos_cero)
 

@@ -14,7 +14,7 @@ la persona, de las del cementerio del brazo.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import chess
 
@@ -40,6 +40,9 @@ class Paso:
     pieza: str
     origen: str
     destino: str
+    si_falla: Paso | None = field(default=None, compare=False)
+    """Lo que se hace en su lugar si la pinza no encuentra la pieza en `origen` (cerró en el aire): al coronar, si no está la dama de reserva, el brazo vuelve a buscar
+    el peón al lugar del cementerio donde él mismo lo acaba de dejar y lo pone en la casilla de coronación como dama, así la partida sigue."""
 
 
 def piezas_retiradas(tablero: chess.Board) -> int:
@@ -178,15 +181,68 @@ def planificar(
     elif jugada.promotion is not None:
         if jugada.promotion != chess.QUEEN:
             raise ValueError("El brazo solo corona a dama: la reserva es una dama por bando")
-        if por_piezas:
-            dama = chess.Piece(chess.QUEEN, pieza.color)
-            reserva = cementerio_de_pieza(dama.symbol(), coronaciones_de(tablero_antes, pieza.color), columnas, color_del_brazo, peones_por_fila)  # la dama que toca para esta coronación
-        else:
-            reserva = reserva_dama(pieza.color)
-        pasos += [Paso(pieza.symbol(), origen, al_cementerio(pieza)), Paso("q", reserva, destino)]
+        lugar_del_peon = al_cementerio(pieza)
+        traer = Paso(pieza.symbol(), lugar_del_peon, destino)  # lo último: el peón que el brazo acaba de dejar, que siempre está
+        repuestos = repuestos_para_coronar(tablero_antes, pieza.color, columnas, color_del_brazo, peones_por_fila) if por_piezas else [reserva_dama(pieza.color)]
+        for lugar in reversed(repuestos[:MAXIMO_DE_REPUESTOS_A_PROBAR]):  # el primero que esté; si la pinza cierra en el aire, prueba el siguiente
+            traer = Paso(_simbolo_en(lugar, pieza.color), lugar, destino, si_falla=traer)
+        pasos += [Paso(pieza.symbol(), origen, lugar_del_peon), traer]
     else:
         pasos.append(Paso(pieza.symbol(), origen, destino))
     return pasos
+
+
+MAXIMO_DE_REPUESTOS_A_PROBAR = 3
+"""Cuántos lugares del cementerio prueba el brazo al buscar una pieza para coronar antes de volver a buscar su propio peón (cada intento cuesta tiempo)."""
+_PREFERENCIA_DE_REPUESTO = (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT, chess.PAWN)
+
+
+def _simbolo_en(lugar: str, color: chess.Color) -> str:
+    """La letra (minúscula) de la pieza que se agarra en `lugar` (decide la apertura de la pinza): la dama en una reserva o en el lugar de una dama, o lo que haya en ese lugar del cementerio ordenado."""
+    tipo = chess.QUEEN
+    if not lugar.startswith(PREFIJO_RESERVA):
+        for candidato, capacidad in _CAPACIDAD.items():
+            simbolo = chess.Piece(candidato, color).symbol()
+            for indice in range(capacidad):
+                try:
+                    if cementerio_de_pieza(simbolo, indice, COLUMNAS_POR_PIEZAS, not color if lugar.startswith(PREFIJO_CEMENTERIO) else color) == lugar:
+                        tipo = candidato
+                except ValueError:
+                    continue
+    return chess.piece_symbol(tipo)  # en minúscula, como siempre: la letra solo decide la apertura de la pinza
+
+
+def _candidatos_de_repuesto(tablero: chess.Board, color: chess.Color, columnas: int, color_del_brazo: chess.Color, peones_por_fila: int) -> list[str]:
+    """Los lugares del cementerio ordenado donde debería haber una pieza de `color`, de la mejor a la peor para hacer de dama: los dos lugares de dama (la capturada o la de
+    repuesto que deja la persona) y después las torres, alfiles, caballos y peones de ese color que salieron del tablero (sale de lo que falta en el tablero, como `lugares_ocupados`)."""
+    lugares = []
+    for tipo in _PREFERENCIA_DE_REPUESTO:
+        simbolo = chess.Piece(tipo, color).symbol()
+        cuantos = _CAPACIDAD[tipo] if tipo == chess.QUEEN else min(retiradas_de(tablero, color, tipo), _CAPACIDAD[tipo])
+        lugares += [cementerio_de_pieza(simbolo, i, columnas, color_del_brazo, peones_por_fila) for i in range(cuantos)]
+    return lugares
+
+
+def repuestos_para_coronar(
+    tablero_antes: chess.Board,
+    color: chess.Color,
+    columnas: int = COLUMNAS_POR_PIEZAS,
+    color_del_brazo: chess.Color = COLOR_DEL_BRAZO,
+    peones_por_fila: int = COLUMNAS_POR_PIEZAS,
+) -> list[str]:
+    """Dónde buscar, en orden, la pieza de `color` que hace de dama en esta coronación: los candidatos (`_candidatos_de_repuesto`) menos los que ya se usaron en las coronaciones
+    anteriores de la partida (se rehace la partida desde el principio: cada coronación anterior se llevó el primero libre). Así el brazo sabe de dónde sacar una pieza aunque no haya
+    una dama de repuesto: usa una de las suyas que la persona capturó."""
+    usados: set[str] = set()
+    partida = tablero_antes.root()
+    for jugada in tablero_antes.move_stack:
+        movida = partida.piece_at(jugada.from_square)
+        if jugada.promotion is not None and movida is not None and movida.color == color:
+            libres = [l for l in _candidatos_de_repuesto(partida, color, columnas, color_del_brazo, peones_por_fila) if l not in usados]
+            if libres:
+                usados.add(libres[0])
+        partida.push(jugada)
+    return [l for l in _candidatos_de_repuesto(tablero_antes, color, columnas, color_del_brazo, peones_por_fila) if l not in usados]
 
 
 def lugares_ocupados(tablero: chess.Board, color_del_brazo: chess.Color = COLOR_DEL_BRAZO, peones_por_fila: int = COLUMNAS_POR_PIEZAS) -> list[dict]:

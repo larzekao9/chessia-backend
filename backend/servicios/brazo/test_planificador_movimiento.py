@@ -1,6 +1,7 @@
 import chess
 import pytest
 from backend.servicios.brazo.planificador_movimiento import (
+    repuestos_para_coronar,
     Paso,
     cementerio_de_pieza,
     coronaciones_de,
@@ -163,3 +164,39 @@ def test_la_coronacion_y_el_resumen_respetan_el_bloque_de_peones() -> None:
     resumen = resumen_del_cementerio(chess.Board(), por_piezas=True, peones_por_fila=4)
     assert resumen["peones_por_fila"] == 4 and resumen["filas_de_peones"] == 2
     assert resumen["reservas"]["lugares"] == ["cementerio_jugador:22", "cementerio_jugador:23"]
+
+
+def _cadena(paso: Paso) -> list[tuple[str, str]]:
+    """(pieza, origen) de un paso y de sus alternativas, en el orden en que el brazo los prueba."""
+    cadena = []
+    while paso is not None:
+        cadena.append((paso.pieza, paso.origen))
+        paso = paso.si_falla
+    return cadena
+
+
+def test_al_coronar_busca_damas_y_despues_piezas_negras_capturadas_y_al_final_su_peon() -> None:
+    tablero = chess.Board("k7/8/8/8/8/8/p7/7K b - - 0 1")  # a las negras les faltan torres, alfiles, caballos, dama y 7 peones
+    pasos = planificar(tablero, tablero.parse_uci("a2a1q"), por_piezas=True)
+    assert pasos[0] == Paso("p", "a2", "cementerio_jugador:7")
+    assert _cadena(pasos[1]) == [
+        ("q", "cementerio_jugador:14"),  # las dos damas (la capturada o la de repuesto)
+        ("q", "cementerio_jugador:15"),
+        ("r", "cementerio_jugador:12"),  # después una torre negra que capturó la persona
+        ("p", "cementerio_jugador:7"),  # y si nada está, su propio peón, que acaba de dejar
+    ]
+    assert all(p.destino == "a1" for p in (pasos[1], pasos[1].si_falla))
+
+
+def test_cada_coronacion_usa_un_repuesto_distinto() -> None:
+    tablero = chess.Board("k7/8/8/8/8/8/pp5K/8 b - - 0 1")
+    tablero.push_uci("a2a1q")
+    tablero.push_uci("h2h3")
+    tablero.push_uci("a1a5")  # la dama coronada se aparta
+    tablero.push_uci("h3h4")
+    assert repuestos_para_coronar(tablero, chess.BLACK)[0] == "cementerio_jugador:15"  # la primera ya se usó
+
+
+def test_sin_piezas_negras_fuera_solo_quedan_las_damas_de_repuesto() -> None:
+    tablero = chess.Board()
+    assert repuestos_para_coronar(tablero, chess.BLACK) == ["cementerio_jugador:14", "cementerio_jugador:15"]

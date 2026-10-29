@@ -256,6 +256,10 @@ class ParametrosAgarre:
     """(dx, dy) de una casilla a la siguiente de la misma fila del cementerio del jugador (mm)."""
     cementerio_jugador_paso_fila: list[float] = field(default_factory=lambda: [0.0, 30.0])
     """(dx, dy) de una fila del cementerio del jugador a la siguiente (mm)."""
+    cementerio_lugares: dict[str, list[float]] = field(default_factory=dict)
+    """(x, y) ENSEÑADOS de lugares puntuales del cementerio (`"cementerio:8"`, `"cementerio_jugador:14"`…): al soltar una pieza enseñándolo se guarda dónde quedó, y ese lugar va
+    siempre ahí en vez de a lo que dé la cuadrícula (`origen` + `paso` + `paso_fila`), que sigue sirviendo para los lugares no enseñados. Así enseñar el caballo, después el alfil y
+    después la torre no corre los anteriores. Dependen de `cementerio_peones_por_fila` (cambia qué número de lugar le toca a cada pieza): al cambiarlo se borran."""
     reservas: dict[str, list[float]] = field(default_factory=dict)
     """(x, y) de las piezas de reserva para coronar: `"dama_blanca"`, `"dama_negra"`."""
 

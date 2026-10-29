@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import math
 
-PASO_MINIMO_MM = 5.0
-"""Menos que esto entre dos casillas no puede ser (la pieza más ancha mide más): se avisa en vez de guardarlo."""
+PASO_MINIMO_MM = 30.0
+"""Menos que esto entre dos casillas y las piezas se chocan en el cementerio (la base más ancha mide unos 30 mm): se avisa en vez de guardarlo."""
 PASO_MAXIMO_MM = 1000.0
 """Más que esto es casi seguro que se llevó la pieza a otro lugar del que se estaba ajustando."""
 DESNIVEL_MAXIMO_MM = 60.0
