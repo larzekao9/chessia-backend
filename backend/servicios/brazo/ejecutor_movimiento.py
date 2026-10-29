@@ -184,12 +184,15 @@ class EjecutorReal(EjecutorMovimiento):
                     p.cementerio_origen[1] + columna * p.cementerio_paso[1] + fila * p.cementerio_paso_fila[1])
         if lugar.startswith(PREFIJO_CEMENTERIO_JUGADOR):
             p = self.parametros
-            if p.cementerio_jugador_origen is None:
-                raise RuntimeError("Falta calibrar el cementerio del jugador (cementerio_jugador_origen): ahí deja la persona las piezas que captura y de ahí toma el brazo la dama para coronar")
+            origen = p.cementerio_jugador_origen or p.cementerio_origen
+            if origen is None:
+                raise RuntimeError("Falta calibrar el cementerio (cementerio_origen): ahí se dejan las piezas capturadas")
+            paso = p.cementerio_jugador_paso if p.cementerio_jugador_origen else p.cementerio_paso
+            paso_fila = p.cementerio_jugador_paso_fila if p.cementerio_jugador_origen else p.cementerio_paso_fila
             indice = int(lugar[len(PREFIJO_CEMENTERIO_JUGADOR):])
             fila, columna = divmod(indice, max(1, p.cementerio_columnas))
-            return (p.cementerio_jugador_origen[0] + columna * p.cementerio_jugador_paso[0] + fila * p.cementerio_jugador_paso_fila[0],
-                    p.cementerio_jugador_origen[1] + columna * p.cementerio_jugador_paso[1] + fila * p.cementerio_jugador_paso_fila[1])
+            return (origen[0] + columna * paso[0] + fila * paso_fila[0],
+                    origen[1] + columna * paso[1] + fila * paso_fila[1])
         if lugar.startswith(PREFIJO_RESERVA):
             nombre = lugar[len(PREFIJO_RESERVA):]
             if nombre not in self.parametros.reservas:
@@ -208,7 +211,7 @@ class EjecutorReal(EjecutorMovimiento):
         z = p.z_agarre_para(tipo_pieza) + sobre_mm
         if p.altura_borde_mm and _es_casilla_del_borde(casilla):  # junto al marco del tablero los dedos no pueden bajar más que el marco (más 2 mm de aire)
             z = max(z, p.z_tope + p.altura_borde_mm + 2.0)
-        return (x, y, z, rx, ry, rz + p.giro_diagonal_grados)
+        return (x, y, z, rx, ry, rz + p.giro_para(tipo_pieza))
 
     def _desnivel_de(self, lugar: str) -> float:
         """Cuánto más abajo que la superficie del tablero queda el suelo de `lugar` (solo el cementerio, ver `ParametrosAgarre.desnivel_cementerio_mm`; el resto, 0)."""

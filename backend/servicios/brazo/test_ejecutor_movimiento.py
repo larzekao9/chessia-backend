@@ -475,3 +475,18 @@ def test_ejecutor_real_lleva_la_pieza_capturada_hasta_la_mesa_del_cementerio_y_e
     en_cementerio = [l[1][2] for l in historial if l[0] == "MovL" and (l[1][0], l[1][1]) == (900.0, 0.0)]
     assert min(en_cementerio) == pytest.approx(102.0)  # el peón capturado baja hasta 2 mm de la mesa
     assert 124.0 in [l[1][2] for l in historial if l[0] == "MovL"]  # y en d5 la suelta 4 mm sobre la altura de agarre (100 + 20 + 4)
+
+
+def test_ejecutor_real_aplica_giro_especifico_por_pieza():
+    parametros = ParametrosAgarre(
+        z_tope=100.0,
+        giro_diagonal_grados=45.0,
+        giros_por_pieza={"r": 35.0, "n": 20.0},
+    )
+    ejecutor, _ = _ejecutor(parametros)
+    rz_base = ejecutor.orientacion[2]
+
+    assert ejecutor._pose("e4", tipo_pieza="p")[5] == pytest.approx(rz_base + 45.0)
+    assert ejecutor._pose("a1", tipo_pieza="r")[5] == pytest.approx(rz_base + 35.0)
+    assert ejecutor._pose("b1", tipo_pieza="n")[5] == pytest.approx(rz_base + 20.0)
+    assert ejecutor._pose("c1", tipo_pieza="b")[5] == pytest.approx(rz_base + 45.0)

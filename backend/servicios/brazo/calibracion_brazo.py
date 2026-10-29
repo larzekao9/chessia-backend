@@ -215,6 +215,9 @@ class ParametrosAgarre:
     aperturas_por_pieza: dict[str, int] = field(default_factory=dict)
     """Apertura de bajada de cada tipo de pieza (`"n"`, `"b"`, `"r"`, `"q"`, `"k"`): depende de su ancho máximo, y cada una se mide."""
     margenes_por_pieza: dict[str, float] = field(default_factory=dict)
+    giros_por_pieza: dict[str, float] = field(default_factory=dict)
+    """Giro de los dedos (°, relativo a la orientación de la casilla) al agarrar o soltar cada tipo de pieza (`"n"`, `"b"`, `"r"`, `"q"`, `"k"`).
+    Si una pieza puntual no está acá, usa `giro_diagonal_grados` (el valor por defecto y del peón)."""
     """Margen de agarre (mm sobre `z_tope`) de cada tipo de pieza (`"n"`, `"b"`, `"r"`, `"q"`, `"k"`): depende de la altura de su base,
     y cada una se mide (igual que `aperturas_por_pieza`). Con un juego de piezas nuevo, la base de alguna puede ser más baja que la
     del peón con la que se midió `margen_agarre_mm` — ahí la pinza choca contra el tablero antes de llegar a agarrarla, y hace
@@ -283,6 +286,13 @@ class ParametrosAgarre:
         """Margen de agarre (mm sobre `z_tope`) para `tipo_pieza`: el propio si está medido en `margenes_por_pieza`, si no el de
         `margen_agarre_mm` (con el que se midió el peón)."""
         return self.margenes_por_pieza.get(tipo_pieza.lower(), self.margen_agarre_mm)
+
+    def giro_para(self, tipo_pieza: str | None = None) -> float:
+        """Ángulo de giro de los dedos (° relativo a la orientación de la casilla) para `tipo_pieza`:
+        el propio si está definido en `giros_por_pieza`, o el global `giro_diagonal_grados` por defecto."""
+        if not tipo_pieza:
+            return self.giro_diagonal_grados
+        return self.giros_por_pieza.get(tipo_pieza.lower(), self.giro_diagonal_grados)
 
     @property
     def z_agarre(self) -> float:

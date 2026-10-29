@@ -221,7 +221,8 @@ class Simulador:
             "z_tope": self.z_tope, "margen_agarre_mm": a.margen_agarre_mm, "giro_diagonal_grados": a.giro_diagonal_grados,
             "altura_segura_mm": a.altura_segura_mm, "fuerza": a.fuerza, "velocidad_pinza": a.velocidad_pinza,
             "aperturas_por_pieza": dict(a.aperturas_por_pieza), "apertura_aproximacion": a.apertura_aproximacion,
-            "margenes_por_pieza": dict(a.margenes_por_pieza), "z_agarre": self.z_tope + a.margen_agarre_mm,
+            "margenes_por_pieza": dict(a.margenes_por_pieza),
+            "giros_por_pieza": dict(a.giros_por_pieza), "z_agarre": self.z_tope + a.margen_agarre_mm,
         }
 
     def actualizar_parametros(self, cambios: dict) -> dict:
@@ -232,7 +233,7 @@ class Simulador:
         """
         conocidos = {
             "z_tope", "margen_agarre_mm", "giro_diagonal_grados", "altura_segura_mm", "fuerza", "velocidad_pinza",
-            "aperturas_por_pieza", "apertura_aproximacion", "margenes_por_pieza",
+            "aperturas_por_pieza", "apertura_aproximacion", "margenes_por_pieza", "giros_por_pieza",
         }
         desconocidos = sorted(set(cambios) - conocidos)
         if desconocidos:
@@ -265,6 +266,19 @@ class Simulador:
                         else:
                             margenes[str(tipo).lower()] = float(_numero(margen, f"margen de {tipo}", 0.0, 30.0))
                     nuevos[clave] = margenes
+                    continue
+                if clave == "giros_por_pieza":
+                    if not isinstance(valor, dict):
+                        raise ValueError("giros_por_pieza tiene que ser un objeto {pieza: grados}")
+                    giros = dict(self.agarre.giros_por_pieza)
+                    for tipo, giro in valor.items():
+                        if str(tipo).lower() not in TIPOS_PIEZA:
+                            raise ValueError(f"pieza desconocida en giros_por_pieza: {tipo}")
+                        if giro is None:
+                            giros.pop(str(tipo).lower(), None)
+                        else:
+                            giros[str(tipo).lower()] = float(_numero(giro, f"giro de {tipo}", -180.0, 180.0))
+                    nuevos[clave] = giros
                     continue
                 rangos = {
                     "z_tope": (50.0, 700.0), "margen_agarre_mm": (0.0, 30.0), "giro_diagonal_grados": (-180.0, 180.0),

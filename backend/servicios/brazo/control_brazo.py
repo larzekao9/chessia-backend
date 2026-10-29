@@ -30,7 +30,7 @@ from backend.servicios.brazo.calibracion_brazo import (
 from backend.servicios.brazo import ajuste_cementerio, geometria_brazo, rutinas, zonas
 from backend.servicios.brazo.cliente_dobot import MODOS_DE_FALLA, ErrorDobot
 from backend.servicios.brazo.ejecutor_movimiento import EjecutorReal
-from backend.servicios.brazo.planificador_movimiento import Paso, cementerio
+from backend.servicios.brazo.planificador_movimiento import Paso, cementerio, cementerio_de_pieza, COLOR_DEL_BRAZO
 from backend.servicios.brazo.pinza_dh import REG_FUERZA, REG_VELOCIDAD
 
 logger = logging.getLogger(__name__)
@@ -240,6 +240,7 @@ def parametros() -> dict:
         "apertura_extra_soltar": agarre.apertura_extra_soltar, "largo_pinza_mm": agarre.largo_pinza_mm,
         "aperturas_por_pieza": dict(agarre.aperturas_por_pieza), "altura_segura_mm": agarre.altura_segura_mm, "corrimiento_x_mm": agarre.corrimiento_x_mm, "corrimiento_y_mm": agarre.corrimiento_y_mm, "alturas_piezas_mm": dict(agarre.alturas_piezas_mm), "altura_borde_mm": agarre.altura_borde_mm, "holgura_traslado_mm": agarre.holgura_traslado_mm,
         "margen_agarre_mm": agarre.margen_agarre_mm, "elevacion_al_soltar_mm": agarre.elevacion_al_soltar_mm, "velocidad_bajada": agarre.velocidad_bajada, "aceleracion_bajada": agarre.aceleracion_bajada, "limites_mesa": agarre.limites_mesa, "zonas_prohibidas": list(agarre.zonas_prohibidas), "margenes_por_pieza": dict(agarre.margenes_por_pieza),
+        "giros_por_pieza": dict(agarre.giros_por_pieza),
         "giro_diagonal_grados": agarre.giro_diagonal_grados, "z_tope": agarre.z_tope,
         "cementerio_origen": agarre.cementerio_origen, "cementerio_paso": agarre.cementerio_paso, "cementerio_paso_fila": agarre.cementerio_paso_fila,
         "cementerio_columnas": agarre.cementerio_columnas, "cementerio_por_piezas": agarre.cementerio_por_piezas, "cementerio_peones_por_fila": agarre.cementerio_peones_por_fila, "reservas": dict(agarre.reservas),
@@ -283,6 +284,12 @@ def actualizar_parametros(valores: dict, guardar: bool = False) -> dict:
                 for k, v in valor.items()
             ):
                 raise ErrorControl(422, "margenes_por_pieza: letras p n b r q k con valores de 0 a 60 (mm)")
+        elif clave == "giros_por_pieza":
+            if not isinstance(valor, dict) or any(
+                k not in "pnbrqk" or len(k) != 1 or not isinstance(v, (int, float)) or isinstance(v, bool) or not -180 <= v <= 180
+                for k, v in valor.items()
+            ):
+                raise ErrorControl(422, "giros_por_pieza: letras p n b r q k con valores de -180 a 180 (°)")
         elif clave in ("cementerio_origen", "cementerio_paso", "cementerio_paso_fila", "cementerio_jugador_origen", "cementerio_jugador_paso", "cementerio_jugador_paso_fila"):
             if not (clave.endswith("_origen") and valor is None) and not _es_par(valor):
                 raise ErrorControl(422, f"{clave} tiene que ser [x, y] en mm" + (" (o null)" if clave.endswith("_origen") else ""))
@@ -1063,7 +1070,11 @@ def _pasos_de_prueba(
         raise ErrorControl(409, "El brazo no tiene calibración del tablero (calibracion_local/brazo.json)")
     o = origen.lower()
     if al_cementerio:
-        pasos = [Paso(tipo_pieza, o, cementerio(casilla_cementerio))]
+        if ejecutor.parametros.cementerio_por_piezas and (casilla_cementerio == 0 or casilla_cementerio is None):
+            destino_cem = cementerio_de_pieza(tipo_pieza, 0, ejecutor.parametros.cementerio_columnas, COLOR_DEL_BRAZO, ejecutor.parametros.cementerio_peones_por_fila)
+        else:
+            destino_cem = cementerio(casilla_cementerio)
+        pasos = [Paso(tipo_pieza, o, destino_cem)]
     else:
         _casilla_o_error(destino)
         d = destino.lower()
@@ -1071,7 +1082,11 @@ def _pasos_de_prueba(
             raise ErrorControl(422, "El origen y el destino son la misma casilla")
         pasos = [Paso(tipo_pieza, o, d)]
         if captura:
-            pasos.insert(0, Paso(tipo_capturada, d, cementerio(casilla_cementerio)))
+            if ejecutor.parametros.cementerio_por_piezas and (casilla_cementerio == 0 or casilla_cementerio is None):
+                destino_cem = cementerio_de_pieza(tipo_capturada, 0, ejecutor.parametros.cementerio_columnas, COLOR_DEL_BRAZO, ejecutor.parametros.cementerio_peones_por_fila)
+            else:
+                destino_cem = cementerio(casilla_cementerio)
+            pasos.insert(0, Paso(tipo_capturada, d, destino_cem))
     try:
         for paso in pasos:
             ejecutor.parametros.z_agarre_para(paso.pieza)
