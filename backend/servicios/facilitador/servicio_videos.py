@@ -18,7 +18,25 @@ MEDIA_VIDEOS_DIR = Path(__file__).resolve().parent.parent.parent / "media" / "vi
 
 URL_BASE_VIDEOS_PIEZAS = "/media/videos_piezas"
 
+# Las 6 piezas clásicas para cartillas de introducción
 TIPOS_PIEZA_VALIDOS: tuple[str, ...] = ("rey", "dama", "torre", "alfil", "caballo", "peon")
+
+# Módulos y temas clave del camino pedagógico de aprendizaje
+MODULOS_CAMINO_VALIDOS: tuple[str, ...] = (
+    "enroque",
+    "mandamientos_apertura",
+    "defensas_activas",
+    "aperturas_clasicas",
+    "gambito_dama",
+    "tactica_doble",
+    "tactica_clavada",
+    "captura",
+    "jaque",
+    "estructuras_peones",
+    "finales_torre",
+)
+
+TIPOS_VIDEO_VALIDOS: tuple[str, ...] = TIPOS_PIEZA_VALIDOS + MODULOS_CAMINO_VALIDOS
 
 EXTENSIONES_VIDEO_VALIDAS: tuple[str, ...] = (".mp4", ".webm", ".mov")
 
@@ -26,9 +44,9 @@ TAMANO_MAXIMO_BYTES = 50 * 1024 * 1024
 
 
 def _validar_tipo_pieza(tipo_pieza: str) -> None:
-    if tipo_pieza not in TIPOS_PIEZA_VALIDOS:
+    if tipo_pieza not in TIPOS_VIDEO_VALIDOS:
         raise ValueError(
-            f"Tipo de pieza inválido: '{tipo_pieza}'. Usá uno de: {', '.join(TIPOS_PIEZA_VALIDOS)}"
+            f"Tipo o módulo inválido: '{tipo_pieza}'. Usá uno de: {', '.join(TIPOS_VIDEO_VALIDOS)}"
         )
 
 
@@ -103,7 +121,7 @@ def listar_videos_piezas(usuario_id: int, con_version: bool = False) -> dict[str
     videos: dict[str, str] = {}
     if not MEDIA_VIDEOS_DIR.is_dir():
         return videos
-    for tipo_pieza in TIPOS_PIEZA_VALIDOS:
+    for tipo_pieza in TIPOS_VIDEO_VALIDOS:
         coincidencias = sorted(MEDIA_VIDEOS_DIR.glob(f"{usuario_id}_{tipo_pieza}.*"))
         if coincidencias:
             url = f"{URL_BASE_VIDEOS_PIEZAS}/{coincidencias[0].name}"
