@@ -18,6 +18,7 @@ los checkpoints no se suben a git.
 | 3 | Cabeza de valor + búsqueda estilo AlphaZero (datos: base de evaluaciones de Lichess) | Primer experimento **hecho y medido** (red de valor entrenada con 1.000.000 de posiciones de Lichess, `modelo_valor.py`, ver el registro de mediciones). No está integrada a la app (solo se usa en las mediciones de `training/enfrentar_modelos.py`) ni es la búsqueda completa estilo AlphaZero: trabajo futuro |
 | 4 | Evolución visible: gráfico de Elo por versión + modo "escalera" | No realizado (trabajo futuro) |
 | 5 | Ficha del modelo y documentación | Continuo (este archivo) |
+| 6 | Historial de la partida real a la búsqueda (repeticiones) | **Hecho** (2026-11-15): la búsqueda evita o busca las repeticiones de la partida; su efecto sobre el Elo no se midió |
 
 ## Cómo se trabaja (sesiones de duración impredecible)
 
@@ -90,7 +91,7 @@ Pero **usada como evaluador dentro de la búsqueda perdió contra la evaluación
 
 ## Límites declarados
 
-- La red solo ve las piezas (no derechos de enroque, captura al paso, contador de 50 jugadas ni repeticiones) y no distingue coronaciones; el detalle, la evidencia y el plan de la v7 están en [`turing_limites_y_plan_v7.md`](turing_limites_y_plan_v7.md).
+- La red solo ve las piezas (no derechos de enroque, captura al paso, contador de 50 jugadas ni repeticiones) y no distingue coronaciones (la búsqueda de nivel maestro sí las compara); el detalle, la evidencia y el plan de la v7 están en [`turing_limites_y_plan_v7.md`](turing_limites_y_plan_v7.md).
 - La red sola imita jugadas de maestros pero no busca variantes: pierde contra Stockfish desde el nivel 5.
 - "Maestro 18" es una etiqueta de la escala del sistema (ELO de los datos de entrenamiento), no una fuerza medida.
 - Las mediciones actuales usan pocas partidas y un solo tiempo de Stockfish; sirven para comparar y ubicar el orden de magnitud.

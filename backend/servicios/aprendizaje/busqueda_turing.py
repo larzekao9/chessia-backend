@@ -265,6 +265,25 @@ def buscar(
     return mejor_resultado
 
 
+def historial_util(tablero: chess.Board) -> chess.Board:
+    """Copia de `tablero` con solo las jugadas que pueden formar una repetición: las que van desde la última captura o avance de peón.
+
+    Una captura o un avance de peón no se deshacen, así que ninguna posición anterior a ellos puede volver a darse: el resto del historial no aporta nada al detectar
+    repeticiones y solo haría más lento cada nodo de la búsqueda (`is_repetition` recorre el historial). Con eso, la búsqueda que parte de la copia conoce las posiciones
+    que ya se dieron en la partida real. Un tablero sin jugadas (armado solo desde un FEN) se devuelve igual.
+    """
+    cantidad = min(tablero.halfmove_clock, len(tablero.move_stack))
+    if cantidad <= 0:
+        return chess.Board(tablero.fen())
+    base = tablero.copy()
+    jugadas = [base.pop() for _ in range(cantidad)]
+    jugadas.reverse()
+    util = chess.Board(base.fen())
+    for jugada in jugadas:
+        util.push(jugada)
+    return util
+
+
 def elegir_jugada_con_busqueda(
     fen: str,
     ruta_checkpoint: str | Path | None = None,
@@ -274,11 +293,16 @@ def elegir_jugada_con_busqueda(
     evaluador: Callable[[chess.Board], int] | None = None,
     valor_raiz: Callable[[chess.Board], int] | None = None,
     peso_valor: float = 0.5,
+    tablero: chess.Board | None = None,
 ) -> str:
-    """Jugada de Turing (en SAN) usando la red del checkpoint y la búsqueda de variantes (con `evaluador` opcional)."""
+    """Jugada de Turing (en SAN) usando la red del checkpoint y la búsqueda de variantes (con `evaluador` opcional).
+
+    Con `tablero` (la partida real, con sus jugadas) la búsqueda conoce las posiciones que ya se dieron y trata como tablas las repeticiones (`historial_util`): evita repetir
+    cuando va ganando y la busca cuando va perdiendo. Sin él parte solo del `fen`, como siempre. Si se pasa, `tablero` tiene que estar en la posición `fen`.
+    """
     from backend.servicios.aprendizaje.inferencia import RUTA_CHECKPOINT_POR_DEFECTO, probabilidades_legales
 
-    tablero = chess.Board(fen)
+    tablero = historial_util(tablero) if tablero is not None else chess.Board(fen)
     probabilidades = probabilidades_legales(tablero, ruta_checkpoint or RUTA_CHECKPOINT_POR_DEFECTO)
     resultado = buscar(
         tablero, probabilidades, profundidad, tiempo_limite, peso_red,

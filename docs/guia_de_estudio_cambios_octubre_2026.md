@@ -207,7 +207,7 @@ se fuerza a dama (`coronar_solo_a_dama`), porque el brazo solo tiene una dama de
 - **Nunca juega ilegal:** la red puntúa las 4096 combinaciones origen-destino y se queda solo con las **jugadas legales** que da python-chess.
 - **Aprendió enroques, capturas al paso y coronaciones** porque estaban en las partidas de Lichess con las que se entrenó.
 - **Pero la red solo ve las piezas** (8×8×12): no ve derechos de enroque, la casilla de captura al paso, el reloj de 50 jugadas ni las repeticiones, y no distingue coronar a dama de coronar a otra pieza.
-- La **búsqueda** de Turing (nivel maestro) sí usa el tablero completo y trata repetición, material insuficiente y 50 jugadas como tablas.
+- La **búsqueda** de Turing (nivel maestro) sí usa el tablero completo y trata repetición, material insuficiente y 50 jugadas como tablas; desde el 2026-11-15 también conoce las repeticiones de la partida real, porque la estrategia le pasa el historial.
 - El detalle, la evidencia en el código y el plan para arreglarlo (v7) están en [`turing_limites_y_plan_v7.md`](turing_limites_y_plan_v7.md).
 
 **Si te preguntan «¿el modelo entiende todas las reglas?»:** «Juega siempre legal y aprendió las jugadas especiales de ejemplos reales. No recibe como entrada algunos datos (derechos de enroque, repetición); eso está medido como límite y el plan para la versión 7 los agrega.»

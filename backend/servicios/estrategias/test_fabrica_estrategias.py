@@ -2,7 +2,12 @@ import chess
 import pytest
 
 from backend.servicios.aprendizaje.niveles import NIVEL_MAX_MODELO
-from backend.servicios.estrategias.estrategia_jugada import EstrategiaModelo, EstrategiaStockfish
+from backend.servicios.estrategias.estrategia_jugada import (
+    EstrategiaJugada,
+    EstrategiaModelo,
+    EstrategiaStockfish,
+    decidir_jugada_de_la_partida,
+)
 from backend.servicios.estrategias.fabrica_estrategias import crear_estrategia_jugada
 
 POSICION_INICIAL = chess.STARTING_FEN
@@ -228,3 +233,65 @@ def test_con_busqueda_el_modelo_tampoco_consulta_a_stockfish(tmp_path, monkeypat
     )
 
     assert chess.Board(POSICION_INICIAL).parse_san(jugada) in chess.Board(POSICION_INICIAL).legal_moves
+
+
+# --- historial de la partida real -------------------------------------------------------------------------------------
+class _SoloFen(EstrategiaJugada):
+    def __init__(self) -> None:
+        self.recibido: str | None = None
+
+    def decidir_jugada(self, fen: str) -> str:
+        self.recibido = fen
+        return "e4"
+
+
+def test_la_estrategia_por_defecto_decide_solo_con_el_fen_aunque_se_le_pase_el_historial() -> None:
+    tablero = chess.Board()
+    tablero.push_san("e4")
+    estrategia = _SoloFen()
+
+    assert estrategia.decidir_jugada_con_historial(tablero) == "e4"
+    assert estrategia.recibido == tablero.fen()
+
+
+def test_decidir_jugada_de_la_partida_usa_el_historial_si_la_estrategia_lo_admite_y_el_fen_si_no() -> None:
+    class ConHistorial:
+        def decidir_jugada(self, fen: str) -> str:
+            return "por fen"
+
+        def decidir_jugada_con_historial(self, tablero: chess.Board) -> str:
+            return "con historial"
+
+    class SoloConoceElFen:  # como los dobles de prueba que solo implementan `decidir_jugada(fen)`
+        def decidir_jugada(self, fen: str) -> str:
+            return "por fen"
+
+    tablero = chess.Board()
+
+    assert decidir_jugada_de_la_partida(ConHistorial(), tablero) == "con historial"
+    assert decidir_jugada_de_la_partida(SoloConoceElFen(), tablero) == "por fen"
+
+
+def test_estrategia_modelo_le_pasa_la_partida_real_a_la_busqueda(monkeypatch) -> None:
+    pytest.importorskip("torch")
+
+    from backend.servicios.aprendizaje import busqueda_turing
+
+    recibido = {}
+
+    def falsa_busqueda(fen, ruta, profundidad, tiempo, peso_red, **kwargs):
+        recibido["fen"] = fen
+        recibido["tablero"] = kwargs.get("tablero")
+        return "e4"
+
+    monkeypatch.setattr(busqueda_turing, "elegir_jugada_con_busqueda", falsa_busqueda)
+    tablero = chess.Board()
+    tablero.push_san("Nf3")
+
+    EstrategiaModelo(profundidad_busqueda=3).decidir_jugada_con_historial(tablero)
+
+    assert recibido["fen"] == tablero.fen()
+    assert recibido["tablero"] is tablero
+
+    EstrategiaModelo(profundidad_busqueda=3).decidir_jugada(tablero.fen())  # sin historial: la búsqueda parte solo del FEN, como siempre
+    assert recibido["tablero"] is None

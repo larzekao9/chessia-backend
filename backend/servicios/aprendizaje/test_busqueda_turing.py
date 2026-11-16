@@ -4,7 +4,7 @@ import math
 import chess
 import pytest
 
-from backend.servicios.aprendizaje.busqueda_turing import MATE, buscar, evaluar, explicar_decision
+from backend.servicios.aprendizaje.busqueda_turing import MATE, buscar, evaluar, explicar_decision, historial_util
 
 
 def _jugada(tablero: chess.Board, san: str) -> chess.Move:
@@ -178,3 +178,56 @@ def test_explicar_decision_si_la_red_acierta_no_hay_correccion() -> None:
     desglose = explicar_decision(tablero, probabilidades, profundidad=2, tiempo_limite=None, peso_red=200)
 
     assert desglose["jugada"] == "e4" and not desglose["corrige_a_la_red"]
+
+
+# --- historial de la partida real -------------------------------------------------------------------------------------
+def _partida_con_posicion_repetida() -> chess.Board:
+    """Blancas con dama de más: 1.De2 Rg8 2.De1 Rh8 vuelve a la posición del comienzo, así que 3.De2 repetiría la que ya se dio tras 1.De2."""
+    tablero = chess.Board("7k/8/8/8/8/8/8/K3Q3 w - - 0 1")
+    for san in ("Qe2", "Kg8", "Qe1", "Kh8"):
+        tablero.push_san(san)
+    return tablero
+
+
+def test_historial_util_conserva_la_posicion_y_las_jugadas_que_pueden_repetirse() -> None:
+    tablero = _partida_con_posicion_repetida()
+
+    util = historial_util(tablero)
+
+    assert util.fen() == tablero.fen()
+    assert len(util.move_stack) == 4
+    assert tablero.is_repetition(2)
+    assert util.is_repetition(2)
+
+
+def test_historial_util_descarta_lo_anterior_a_la_ultima_captura_o_avance_de_peon() -> None:
+    tablero = chess.Board()
+    for san in ("e4", "e5", "Nf3", "Nc6"):
+        tablero.push_san(san)
+
+    util = historial_util(tablero)
+
+    assert util.fen() == tablero.fen()
+    assert [jugada.uci() for jugada in util.move_stack] == ["g1f3", "b8c6"]  # desde e7e5, la última jugada que no se deshace
+
+
+def test_historial_util_de_un_tablero_sin_jugadas_es_el_mismo_fen() -> None:
+    tablero = chess.Board("7k/8/8/8/8/8/8/K3Q3 w - - 5 40")
+
+    util = historial_util(tablero)
+
+    assert util.fen() == tablero.fen()
+    assert not util.move_stack
+
+
+def test_con_historial_no_repite_la_posicion_cuando_va_ganando() -> None:
+    tablero = _partida_con_posicion_repetida()
+    repetir = _jugada(tablero, "Qe2")  # llevaría a una posición que ya se dio
+
+    con_historial = buscar(historial_util(tablero), None, profundidad=1, tiempo_limite=None, peso_red=0, candidatas_max=100)
+    solo_fen = buscar(chess.Board(tablero.fen()), None, profundidad=1, tiempo_limite=None, peso_red=0, candidatas_max=100)
+
+    assert dict(con_historial.candidatas)[repetir] == 0  # tablas por repetición
+    assert con_historial.jugada != repetir
+    assert con_historial.puntaje > 800  # elige otra jugada, con la dama de ventaja
+    assert dict(solo_fen.candidatas)[repetir] > 800  # sin el historial no sabe que repite

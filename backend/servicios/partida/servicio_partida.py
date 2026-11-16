@@ -20,6 +20,7 @@ import chess
 from backend.modelos.partida import Partida, fin_por_reglas
 from backend.repositorios.repositorio_partida import RepositorioPartidas, crear_repositorio_partidas
 from backend.servicios.brazo.servicio_brazo import ejecutar_respuesta_en_brazo
+from backend.servicios.estrategias.estrategia_jugada import decidir_jugada_de_la_partida
 from backend.servicios.estrategias.fabrica_estrategias import TIPOS_SOPORTADOS, crear_estrategia_jugada
 from backend.servicios.motor.motor_ajedrez import NIVEL_MAX, analizar_posicion, analizar_posiciones
 import backend.servicios.partida.ciclo_vida as ciclo_vida
@@ -490,7 +491,7 @@ def mover(
         estrategia = crear_estrategia_jugada(partida.tipo_oponente, nivel=partida.nivel)
         fen_antes_motor = tablero_intento.fen()
         inicio_decision = time.perf_counter()
-        jugada_motor_san = estrategia.decidir_jugada(fen_antes_motor)
+        jugada_motor_san = decidir_jugada_de_la_partida(estrategia, tablero_intento)
         tiempo_rival_ms = int((time.perf_counter() - inicio_decision) * 1000)
         tablero_antes_motor = tablero_intento.copy()
         jugada_motor_move = tablero_intento.parse_san(jugada_motor_san)
@@ -620,7 +621,7 @@ def responder(partida_id: str, coronar_solo_a_dama: bool = False) -> dict:
     estrategia = crear_estrategia_jugada(partida.tipo_oponente, nivel=partida.nivel)
     fen_antes = tablero.fen()
     inicio = time.perf_counter()
-    jugada_san = estrategia.decidir_jugada(fen_antes)
+    jugada_san = decidir_jugada_de_la_partida(estrategia, tablero)
     tiempo_ms = int((time.perf_counter() - inicio) * 1000)
     jugada = tablero.parse_san(jugada_san)
     if coronar_solo_a_dama and jugada.promotion not in (None, chess.QUEEN):

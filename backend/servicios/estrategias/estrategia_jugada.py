@@ -47,6 +47,19 @@ class EstrategiaJugada(ABC):
     def decidir_jugada(self, fen: str) -> str:
         """Devuelve la jugada elegida para la posición dada, en notación SAN."""
 
+    def decidir_jugada_con_historial(self, tablero: chess.Board) -> str:
+        """Lo mismo que `decidir_jugada`, pero con la partida real (el `tablero` con sus jugadas) para quien pueda aprovechar el historial.
+
+        Por defecto ignora el historial y decide solo con la posición; `EstrategiaModelo` lo usa para conocer las repeticiones de la partida.
+        """
+        return self.decidir_jugada(tablero.fen())
+
+
+def decidir_jugada_de_la_partida(estrategia, tablero: chess.Board) -> str:
+    """Pide la jugada a `estrategia` con el historial de la partida si ella lo admite; si no (por ejemplo una estrategia que solo conoce `decidir_jugada(fen)`), con el FEN."""
+    con_historial = getattr(estrategia, "decidir_jugada_con_historial", None)
+    return con_historial(tablero) if callable(con_historial) else estrategia.decidir_jugada(tablero.fen())
+
 
 class EstrategiaStockfish(EstrategiaJugada):
     """Stockfish decide la jugada.
@@ -117,6 +130,13 @@ class EstrategiaModelo(EstrategiaJugada):
         return modo_maestro and self.profundidad_busqueda > 0
 
     def decidir_jugada(self, fen: str) -> str:
+        return self._decidir(fen, None)
+
+    def decidir_jugada_con_historial(self, tablero: chess.Board) -> str:
+        """Con la partida real: la búsqueda de variantes conoce las repeticiones que ya se dieron (ver `busqueda_turing.historial_util`). Por debajo del modo maestro no cambia nada."""
+        return self._decidir(tablero.fen(), tablero)
+
+    def _decidir(self, fen: str, tablero: chess.Board | None) -> str:
         from backend.servicios.aprendizaje.inferencia import (
             RUTA_CHECKPOINT_POR_DEFECTO,
             predecir_jugada_maestra,
@@ -130,5 +150,6 @@ class EstrategiaModelo(EstrategiaJugada):
             from backend.servicios.aprendizaje.busqueda_turing import elegir_jugada_con_busqueda
 
             _, tiempo, peso_red = parametros_de_busqueda()
-            return elegir_jugada_con_busqueda(fen, ruta, self.profundidad_busqueda, tiempo, peso_red)
+            con_historial = {} if tablero is None else {"tablero": tablero}  # sin historial la llamada es la de siempre
+            return elegir_jugada_con_busqueda(fen, ruta, self.profundidad_busqueda, tiempo, peso_red, **con_historial)
         return predecir_jugada_maestra(fen, ruta, nivel=self.nivel)

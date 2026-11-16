@@ -2,7 +2,7 @@
 
 > **Para qué sirve este documento.** (1) Declara con evidencia qué datos de las reglas del ajedrez NO recibe la red de Turing; sale directo
 > a la sección *Limitaciones y trabajo futuro* de la tesis. (2) Es el plan concreto para volver a entrenar y cerrar esas brechas. (3) Responde si
-> Turing puede tener «carácter» (atacante, sólido…) y ser más humano. Pensado para pulir el sistema antes de la feria de la facultad (fines de noviembre de 2026).
+> Turing puede tener «carácter» (atacante, sólido…) y ser más humano. Se redactó para pulir el sistema antes de la feria de la facultad (fines de noviembre de 2026), que ya pasó: lo que no entró en el código queda como trabajo futuro.
 >
 > Las mediciones del modelo están en [`turing_hoja_de_ruta.md`](turing_hoja_de_ruta.md); la explicación en criollo, en
 > [`guia_de_estudio_turing.md`](guia_de_estudio_turing.md); lo que se agregó a la plataforma en octubre, en
@@ -32,14 +32,13 @@
 | **Derechos de enroque** (torre o rey que ya se movieron) | **No** | python-chess solo ofrece el enroque si sigue permitido; la red lo aprendió de ejemplos | No puede «planear» conservar o perder el derecho; a veces le da puntaje a un enroque que ya no se puede (se descarta) |
 | **Captura al paso** (casilla disponible solo un turno) | **No** | python-chess solo la ofrece justo después del avance doble | No sabe que existe esa oportunidad pasajera: puede no jugarla cuando conviene |
 | **Contador de 50 jugadas** | **No** | La **búsqueda** lo trata como tablas (≥ 100 medias jugadas) | La red no «siente» que se acerca el empate |
-| **Repetición de posiciones** | **No** (la entrada es una sola posición, sin historia) | La búsqueda detecta repeticiones **dentro de las jugadas que explora** | Ver la nota de abajo |
-| **Elección de la pieza al coronar** | No: las 4 coronaciones comparten origen y destino, así que **la red les da el mismo puntaje** | En `predecir_jugada` gana la dama por el orden en que python-chess genera las jugadas; la búsqueda enumera todas las legales | Una subcoronación (por ejemplo a caballo para dar jaque con horquilla o evitar un ahogado) no está garantizada. *No verificado si la búsqueda llega a elegirla.* |
+| **Repetición de posiciones** | **No** (la entrada es una sola posición, sin historia) | La búsqueda detecta repeticiones, **también las de la partida real**: desde el 2026-11-15 recibe el historial | La red no las «siente», pero la búsqueda las evita o las busca. Ver la nota de abajo |
+| **Elección de la pieza al coronar** | No: las 4 coronaciones comparten origen y destino, así que **la red les da el mismo puntaje** | En `predecir_jugada` gana la dama por el orden en que python-chess genera las jugadas; la búsqueda enumera todas las legales | La red sola siempre corona a dama, pero la búsqueda de nivel maestro compara las cuatro y **puede subcoronar** (verificado el 2026-11-15: en posiciones donde coronar a dama ahoga al rival, elige coronar a torre). En la partida física con el brazo se corona siempre a dama a propósito: el brazo solo tiene damas de reserva. |
 | Reloj | No | — | Juega igual con 10 s que con 10 min |
 
-**Nota sobre la repetición (importante por la regla nueva).** La estrategia recibe solo el **FEN** de la posición (`decidir_jugada(fen)`), y un FEN **no trae las jugadas anteriores**.
-Entonces la búsqueda sabe del enroque, la captura al paso y el contador de 50 jugadas (están en el FEN) pero **no conoce las posiciones que ya pasaron en la partida real**. Desde octubre
-la triple repetición termina la partida en tablas de forma automática, así que Turing puede caer en ella (o no buscarla cuando le conviene) sin darse cuenta. La mejora más barata no
-requiere reentrenar: **pasarle el historial de jugadas a la estrategia** (parámetro opcional, aditivo) para que su búsqueda arranque con el tablero completo.
+**Nota sobre la repetición (importante por la regla nueva).** Hasta el 2026-11-15 la estrategia recibía solo el **FEN** de la posición (`decidir_jugada(fen)`), y un FEN **no trae las jugadas anteriores**: la búsqueda sabía del enroque, la captura al paso y el contador de 50 jugadas (están en el FEN), pero no de las posiciones que ya habían pasado en la partida real. Como desde octubre la triple repetición termina la partida en tablas de forma automática, Turing podía caer en ella (o no buscarla cuando le convenía) sin darse cuenta.
+
+**Resuelto (2026-11-15), sin reentrenar.** La partida le pasa a la estrategia el tablero con sus jugadas (`decidir_jugada_con_historial`, parámetro opcional y aditivo: lo que solo conoce `decidir_jugada(fen)` sigue funcionando) y la búsqueda parte de ese historial recortado a lo que puede repetirse (`historial_util`: desde la última captura o avance de peón). Como una repetición vale tablas, **evita repetir cuando va ganando y la busca cuando va perdiendo**. Está cubierto con pruebas (`test_busqueda_turing.py` y `test_fabrica_estrategias.py`). Límites: no se midió su efecto sobre el Elo; solo actúa en el modo maestro, que es el que usa la búsqueda (por debajo del nivel 18 no cambia nada); y el panel de Razonamiento Neuronal recibe un FEN, así que muestra el cálculo sin historial.
 
 **Qué NO es un límite:** la legalidad. Aunque la red no vea esos datos, el motor de reglas garantiza que ninguna jugada ilegal salga, y la red vio enroques, capturas al paso y coronaciones
 reales en las partidas de Lichess con las que se entrenó (todas las jugadas de cada partida son ejemplos de entrenamiento).
@@ -69,7 +68,7 @@ Los de enroque, captura al paso y contador salen del propio FEN. **El de repetic
 - [`modelo_jugadas.py`](../backend/servicios/aprendizaje/modelo_jugadas.py): la primera capa `nn.Conv2d(12, canales, …)` pasa a `nn.Conv2d(canales_entrada, canales, …)`.
 - [`inferencia.py`](../backend/servicios/aprendizaje/inferencia.py): `cargar_modelo` hoy deduce los canales **de salida** de la primera capa; hay que leer también los de **entrada** (12 para v1–v6, 20 para v7) y guardar `canales_entrada` en el checkpoint. Así las versiones viejas siguen cargando.
 - [`modelo_valor.py`](../backend/servicios/aprendizaje/modelo_valor.py): la cabeza de valor tiene la misma capa de 12 canales y se extiende igual.
-- `decidir_jugada(fen, historial=None)` en la estrategia del modelo: parámetro opcional; si falta, los canales de repetición van en cero (comportamiento actual).
+- La estrategia del modelo ya admite el historial (`decidir_jugada_con_historial(tablero)`, desde el 2026-11-15; hoy lo usa solo la búsqueda). Para la v7 faltaría pasárselo también a la red; si falta, los canales de repetición van en cero (comportamiento actual).
 
 ### 3.3 Arrancar desde v6 (no desde cero)
 **Expansión de la entrada con pesos en cero:** se copian los pesos de v6 a los 12 primeros canales de la primera capa y los 8 nuevos se inicializan en **0**. La v7 arranca **idéntica** a v6 (mismos
@@ -99,7 +98,7 @@ La partida **física** seguirá forzando la dama: el brazo solo tiene una dama d
 
 La pregunta es si Turing puede jugar con **carácter** (más atacante, más sólido, más posicional) y verse **más humano**.
 
-### 4.1 Nivel A — por inferencia, sin reentrenar (alcanzable antes de la feria)
+### 4.1 Nivel A — por inferencia, sin reentrenar (alcanzable sin reentrenar)
 La red ya devuelve una lista de candidatas ordenadas. La personalidad **reordena esas candidatas** con unas reglas simples sobre la jugada, calculadas con python-chess:
 
 `puntaje = log(probabilidad de la red) + Σ peso_de_estilo × característica_de_la_jugada`
@@ -123,19 +122,21 @@ La red ya devuelve una lista de candidatas ordenadas. La personalidad **reordena
 ### 4.2 Nivel B — reentrenando (trabajo futuro de la tesis)
 - **Por estilo:** ajuste fino con subconjuntos de partidas elegidos con un criterio medible (por ejemplo, partidas con jaques tempranos y sacrificios para el perfil atacante).
 - **Más humano por franja de Elo (idea de Maia Chess).** Hoy los niveles bajos se logran con **temperatura**, que produce errores «de máquina» (jugadas al azar entre las candidatas). Una persona de 1200 no falla al azar: falla de formas características. Maia Chess (McIlroy-Young, Sen, Kleinberg y Anderson, KDD 2020) entrenó modelos separados por franja de rating con partidas humanas de esa franja y logró que predijeran jugadas humanas mejor que un motor debilitado. Para Turing sería: un modelo con partidas de 1100–1400 para los niveles bajos, otro de 1500–1800 para los medios, y el actual para los altos. *(Verificar la cita y los datos antes de usarla.)*
-  - Requiere **muchas partidas por franja** y tiempo de Colab; con menos datos habrá menos precisión. Es la mejora que más acerca a Turing a «enseñar jugando contra alguien parecido a un humano», pero no es para antes de la feria.
+  - Requiere **muchas partidas por franja** y tiempo de Colab; con menos datos habrá menos precisión. Es la mejora que más acerca a Turing a «enseñar jugando contra alguien parecido a un humano», pero queda como trabajo futuro.
 
 ### 4.3 Recomendación
-Para la feria de noviembre: **Nivel A** (carácter por inferencia, con la medición que lo respalde) y la **mejora del historial** (sección 2). Dejar la **v7** y el **modelo por franja de Elo** como trabajo futuro, con el plan de este documento.
+Recomendación original para la feria de noviembre: **Nivel A** (carácter por inferencia, con la medición que lo respalde) y la **mejora del historial** (sección 2). Dejar la **v7** y el **modelo por franja de Elo** como trabajo futuro, con el plan de este documento.
+
+**Estado (2026-11-15):** la feria ya pasó. La **elección de la coronación ya está resuelta**: la persona elige la pieza con el selector de coronación del tablero, y la búsqueda de Turing prueba las cuatro coronaciones y puede elegir una que no sea dama (en la partida física con el brazo se corona siempre a dama, por diseño). El **historial de la partida ya llega a la estrategia** (ver la nota de la sección 2). **No están en el código** y quedan como trabajo futuro, tal como los plantea la sección 6: las personalidades de Turing (no hay selector de «carácter»), la v7 y el modelo por franja de Elo.
 
 ---
 
-## 5. Orden de trabajo sugerido hasta la feria
+## 5. Orden de trabajo sugerido (plan original para la feria; los pasos 1 y 2 ya están resueltos y los demás quedan como trabajo futuro)
 
 | Orden | Qué | Esfuerzo | Resultado mostrable |
 |---|---|---|---|
-| 1 | Pasar el **historial** a la estrategia del modelo | Chico | Turing deja de ignorar las repeticiones de la partida real |
-| 2 | **Búsqueda elige la coronación** (comparar las 4) | Chico | Subcoronación posible |
+| 1 | Pasar el **historial** a la estrategia del modelo | Chico | Turing deja de ignorar las repeticiones de la partida real — **ya resuelto** (2026-11-15) |
+| 2 | **Búsqueda elige la coronación** (comparar las 4) | Chico | Subcoronación posible — **ya resuelto** (la búsqueda compara las cuatro) |
 | 3 | **Personalidades** (Nivel A) + medición de indicadores | 2–3 días | Cuatro caracteres distintos con números |
 | 4 | **v7** con 20 canales en Colab (expansión desde v6) | El mayor; depende del entrenamiento | Mejora dirigida en captura al paso y enroque |
 | 5 | Modelo por franja de Elo | Futuro | Rival «humano» en niveles bajos |
@@ -148,8 +149,8 @@ Cada paso se cierra con su medición y se registra en [`turing_hoja_de_ruta.md`]
 
 > La red de política de Turing (versión 6) recibe como entrada únicamente la posición de las piezas (tensor de 8×8×12 visto desde el jugador que mueve), sin los derechos de enroque, la casilla
 > de captura al paso, el contador de jugadas sin progreso ni el historial de posiciones. La legalidad de las jugadas está garantizada por el motor de reglas, que filtra las jugadas candidatas
-> de la red, y la búsqueda ligera de nivel maestro sí considera el enroque, la captura al paso y la regla de las 50 jugadas por trabajar con el tablero completo del FEN, pero no conoce las
-> repeticiones de la partida real porque la estrategia recibe solo la posición actual. Además, la red no distingue entre las cuatro coronaciones posibles. Como trabajo futuro se propone una
+> de la red, y la búsqueda ligera de nivel maestro sí considera el enroque, la captura al paso y la regla de las 50 jugadas por trabajar con el tablero completo del FEN y, como recibe el historial de la partida real, también reconoce las
+> repeticiones (la red, en cambio, no las ve). Además, la red no distingue entre las cuatro coronaciones posibles, aunque la búsqueda de nivel maestro sí las compara (en la partida física con el brazo se corona siempre a dama, porque el brazo solo dispone de damas de reserva). Como trabajo futuro se propone una
 > versión 7 con planos de entrada adicionales (derechos de enroque, captura al paso, contador de 50 jugadas y repeticiones), inicializada desde la versión 6 mediante expansión de la primera capa
 > con pesos en cero, evaluada con una prueba dirigida sobre posiciones donde esas reglas intervienen; así como personalidades de juego por reponderación de candidatas y modelos específicos
 > por franja de rating para reproducir errores humanos en los niveles bajos.
