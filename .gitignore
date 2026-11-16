@@ -86,3 +86,9 @@ training/dataset_propio_volumen/
 
 # ZIP de fotos para Colab (scripts/exportar_zip_colab.py): son del dataset propio, no se versionan
 training/exportaciones_colab/
+
+# Temporales locales, empaquetados de despliegue y renders/documentación auxiliar (no son código)
+.tmp-deploy/
+output/
+scratch/
+generar_propuesta_capitulos.py
