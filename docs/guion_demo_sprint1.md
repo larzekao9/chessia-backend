@@ -1,5 +1,7 @@
 # Guión de demo — cierre de Sprint 1 / defensa SW2
 
+> **Documento histórico del Sprint 1.** La defensa final (Expociencia 2026) se hizo con el sistema completo, con el brazo real; para el estado actual ver [`plan_sprints.md`](plan_sprints.md).
+
 Guión concreto de qué mostrar, en qué orden, en la web y en el código. Pensado
 para que lo que se muestra **nunca pueda salir mal frente al jurado** — todo
 lo que está acá ya se probó en vivo en esta sesión. Lo que todavía es

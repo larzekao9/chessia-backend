@@ -13,7 +13,7 @@ persistencia real todavía. Tu trabajo vive en `backend/main.py`, `backend/rutas
 `backend/servicios/partida/`, `backend/servicios/estrategias/`, `backend/repositorios/`,
 `backend/esquemas/`, `backend/modelos/`, y los endpoints que exponen `backend/servicios/motor/`.
 Arquitectura en capas (MVC) + patrones Strategy/Factory/Repository — ver
-`PLAN_IMPLEMENTACION_COMPLETO.md`, secciones 3 y 4, si necesitás el porqué de cada decisión.
+`docs/plan_sprints.md` (notas de seguimiento), si necesitás el porqué de cada decisión.
 
 ## Regla no negociable de este proyecto
 

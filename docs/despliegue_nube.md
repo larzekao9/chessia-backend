@@ -2,11 +2,9 @@
 
 Para la instalación actual del equipo, conectada por Tailscale, consultar [Actualizar el servidor home-lab](despliegue_homelab.md). Allí se documentan el acceso, los dos archivos de Compose y la publicación por Funnel.
 
-Complementa la sección "Dónde corre cada cosa" de `PLAN_IMPLEMENTACION_COMPLETO.md` (sección 6):
-la nube sigue siendo **opcional, un plus para mostrar que el software es desplegable** — no
-reemplaza correr todo en local el día de la defensa (cámara y brazo necesitan estar conectados a
-una máquina física). Esta guía deja armados y probados los archivos para cuando se decida usar la
-parte opcional.
+Esta guía explica cómo desplegar el sistema con Docker en cualquier servidor. El sistema ya corre
+desplegado en el servidor del laboratorio (ver el enlace de arriba). El servidor aloja la web y la
+API; la cámara y el brazo físico necesitan estar conectados a una máquina del laboratorio.
 
 ## Lo primero: este proyecto no tiene el mismo problema que el del cine
 
@@ -147,11 +145,11 @@ URL con `:8000` — un Caddy delante (certificado automático, gratis) es la for
 si se quiere armado, es un contenedor más en `deploy/docker-compose.yml` y un archivo de
 configuración de una docena de líneas, sin tocar nada de lo de arriba.
 
-## Pendiente / a decidir
+## Estado y recomendaciones
 
-- No se commiteó nada de esto todavía (`deploy/`, `.dockerignore`, este archivo) — son archivos
-  nuevos, no tocan código existente. Revisarlos y decidir cuándo commitear.
-- La contraseña de Postgres para la instancia real: generarla nueva, no reusar la de prueba local
-  de `deploy/.env` (ese archivo no se commitea, ver `deploy/.env.example`).
-- Si se agrega HTTPS, decidir el dominio (uno gratis de sslip.io alcanza para probar, igual que en
-  el otro proyecto, sin tener que comprar uno).
+- Los archivos de despliegue (`deploy/`, `.dockerignore`, este archivo) están versionados y el
+  sistema corre desplegado en el servidor del laboratorio (ver [`despliegue_homelab.md`](despliegue_homelab.md)).
+- La contraseña de Postgres de una instancia real tiene que ser propia, no la de prueba local:
+  vive en `deploy/.env` del servidor, que no se commitea (ver `deploy/.env.example`).
+- HTTPS: en el servidor del laboratorio lo da Tailscale Funnel (con su dominio `*.ts.net`). En otro
+  servidor, un dominio gratis de sslip.io alcanza para probar, sin comprar uno.

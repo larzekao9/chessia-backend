@@ -6,6 +6,8 @@ que el tablero físico quedó igual que el digital.
 
 **Plazo:** el proyecto debe quedar terminado el 26 o 27 de octubre de 2026. Este plan se redactó el 24 de octubre.
 
+**Estado (2026-11-15):** este plan se cumplió. La partida física completa (cámara, Turing y brazo, con capturas, enroque, captura al paso y coronación, y verificación del tablero) funciona y se presentó y defendió en la Expociencia 2026. El resto del documento es el plan original, tal como se redactó el 24 de octubre; para el estado vigente ver [`plan_sprints.md`](plan_sprints.md) y la [bitácora del brazo](bitacora_brazo_robotico.md).
+
 ## 1. Estado actual (qué existe)
 
 | Parte | Qué hay | Dónde |

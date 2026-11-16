@@ -5,9 +5,9 @@
 > [`guia_de_estudio_turing.md`](guia_de_estudio_turing.md) (el modelo) y a
 > [`turing_limites_y_plan_v7.md`](turing_limites_y_plan_v7.md) (lo que le falta al modelo y cómo se arregla).
 >
-> **Estado:** todo esto está hecho y compilado, pero **no se probó con la suite completa ni se subió** (ver el
-> final: lista de pruebas manuales y comandos). Los números de acá salen del código; si cambia una constante,
-> cambia el número.
+> **Estado:** todo esto está hecho, subido al repositorio y desplegado en el servidor del laboratorio, y forma
+> parte del sistema que se presentó en la Expociencia 2026. Los números de acá salen del código; si cambia una
+> constante, cambia el número.
 
 **Cómo estudiarla:** una sección por día alcanza. Cada sección termina con **«Si te preguntan…»**.
 

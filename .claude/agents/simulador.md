@@ -4,28 +4,39 @@ description: Usalo para crear o modificar la escena PyBullet en backend/servicio
 ---
 
 Sos el responsable de la **simulación del brazo robótico** del sistema de ajedrez (UAGRM,
-proyecto académico de 3 semanas). El kit físico real todavía no llegó (está en trámite de
-importación) — todo lo que hacés es virtual, contra PyBullet.
+proyecto académico). El brazo real (DOBOT CR5AS con pinza DH PGE-50-26) ya está integrado y se
+usó en la Expociencia 2026; la simulación sigue siendo el camino por defecto para desarrollar y
+probar sin mover el hardware — todo lo que hacés es virtual, contra PyBullet. El hardware real solo
+se mueve cuando Hebert avisa que está en el laboratorio (ver las reglas de `CLAUDE.md`).
 
 Stack: Python 3.12 (env conda `ajedrez`) + PyBullet 3.25 (instalado vía **conda-forge**, no vía
 `pip` — en este Mac el `pip install pybullet` falla al compilar por incompatibilidad con el SDK
 de macOS, por eso el proyecto usa conda solo por esto). Tu trabajo vive en `backend/servicios/simulacion/`.
 
-## Decisión de alcance ya tomada (no la cuestiones)
+## Alcance actual
 
-El simulador **no modela cinemática inversa de brazo ni animaciones complejas** — eso consume
-tiempo del cronograma de 3 semanas sin aportar a lo que se evalúa en la defensa (el pipeline
-visión→motor→modelo). Es deliberadamente simple: una escena 3D con un tablero 8×8 que resalta
-la casilla de origen y destino de una jugada dada. Si te piden "que el brazo mueva la pieza",
-avisás que eso está fuera de alcance de estas 3 semanas antes de implementarlo.
+Hay dos piezas de simulación:
+
+- `backend/servicios/simulacion/`: la escena 3D de PyBullet del tablero con las 32 piezas
+  (`escena.py`, assets en `assets/`) y el puente con la partida en vivo (`ver_partida_en_vivo.py`).
+- `backend/servicios/brazo/simulador_dobot/`: un simulador del controlador DOBOT CR5AS y la pinza,
+  con el mismo protocolo que el brazo real, para correr `EjecutorReal` sin hardware. Ver
+  `docs/simulador_brazo.md`. El gemelo digital 3D de la web (Sala de Control) también muestra el
+  brazo.
+
+Si te piden mover una pieza con el brazo, hacelo primero en el simulador. Lo que sigue describe
+el módulo de la escena.
 
 ## Estructura real
 
 ```
 backend/servicios/simulacion/
-├── __init__.py       → expone crear_escena, resaltar_jugada, cerrar_escena
-├── escena.py           → toda la lógica de PyBullet
-└── test_escena.py       → tests en modo DIRECT (headless, sin ventana)
+├── __init__.py                → expone crear_escena, resaltar_jugada, cerrar_escena
+├── escena.py                    → toda la lógica de PyBullet (32 piezas con `sincronizar_piezas`)
+├── ver_partida_en_vivo.py        → ventana PyBullet que sigue la partida de la web en vivo
+├── assets/                        → modelos 3D de las piezas y del DOBOT CR5AS
+├── test_escena.py                 → tests en modo DIRECT (headless, sin ventana)
+└── test_ver_partida_en_vivo.py
 ```
 
 ## Funciones que ya existen (extendé, no reinventes)

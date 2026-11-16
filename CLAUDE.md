@@ -3,21 +3,21 @@
 Instrucciones de proyecto para Claude Code. Este archivo se lee automáticamente al abrir
 la carpeta del repositorio.
 
-**Contexto completo del proyecto y plan semana a semana:** ver `PLAN_IMPLEMENTACION_COMPLETO.md`
-en la raíz del repo. Este archivo (`CLAUDE.md`) define reglas de comportamiento;
-`PLAN_IMPLEMENTACION_COMPLETO.md` define qué construir y en qué orden.
+**Contexto del proyecto y seguimiento por sprint:** ver `README.md`, `docs/plan_sprints.md` y la
+bitácora del brazo (`docs/bitacora_brazo_robotico.md`). Este archivo (`CLAUDE.md`) define reglas de
+comportamiento; `docs/plan_sprints.md` registra qué se construyó y en qué orden. (El plan inicial,
+`PLAN_IMPLEMENTACION_COMPLETO.md`, se retiró del repositorio.)
 
 ---
 
 ## Quién sos en este proyecto
 
-Estás ayudando a implementar el sistema descrito en `PLAN_IMPLEMENTACION_COMPLETO.md`: un brazo
-robótico potenciado con inteligencia artificial para el aprendizaje del ajedrez. El equipo es
-Suárez Burgos Hebert y Arze Kao Luis Ángel, estudiantes de Ingeniería Informática (UAGRM). Es un
-proyecto académico con fecha de defensa próxima — **el proyecto tiene que quedar terminado entre
-el 26 y el 27 de octubre de 2026** (Expociencia y presentación al ingeniero). Priorizá siempre lo
-que se pueda demostrar funcionando por sobre lo que sea técnicamente más elegante pero arriesgado
-de terminar a tiempo.
+Estás ayudando a mantener y mejorar el sistema ChessIA (ver `README.md`): un brazo robótico
+potenciado con inteligencia artificial para el aprendizaje del ajedrez. El equipo es Suárez Burgos
+Hebert y Arze Kao Luis Ángel, estudiantes de Ingeniería Informática (UAGRM). Es un proyecto
+académico que ya se presentó y defendió en la Expociencia 2026 y funciona de punta a punta; el
+trabajo ahora es mantenerlo, pulirlo y documentarlo. Priorizá siempre lo que se pueda demostrar
+funcionando por sobre lo que sea técnicamente más elegante pero arriesgado de terminar a tiempo.
 
 ---
 
@@ -47,8 +47,7 @@ confirmación antes de desviarte.
    reentrena en lotes controlados y versionados, después de acumular partidas, nunca de forma
    directa mientras el sistema está en uso.
 3. **El brazo físico real se mueve solo con estas precauciones.** El kit llegó y su integración
-   (DOBOT CR5AS + pinza DH PGE-50-26) se adelantó por la Expociencia y la fecha de presentación
-   que fijó el ingeniero. El simulador (PyBullet y el gemelo digital 3D) sigue siendo el camino
+   (DOBOT CR5AS + pinza DH PGE-50-26) quedó terminada y se usó en la Expociencia 2026. El simulador (PyBullet y el gemelo digital 3D) sigue siendo el camino
    por defecto para desarrollar y probar. El hardware real solo se mueve cuando Hebert avisa que
    está en el laboratorio, y siempre con: (a) velocidad global al 20 %; (b) una mano en la parada
    de emergencia; (c) una pieza o casilla nueva se prueba primero sin cerrar la pinza
@@ -59,8 +58,8 @@ confirmación antes de desviarte.
 4. **Fijar versiones exactas en `requirements.txt`** para toda librería nueva que agregues
    (`python-chess`, `stockfish`, `opencv-python`, `pybullet`, `fastapi`, `torch`, etc.). Nunca
    dejar una dependencia sin versión fijada.
-5. **Seguir la estructura de carpetas** ya definida en `PLAN_IMPLEMENTACION_COMPLETO.md`
-   (`backend/`, `training/`, `frontend/`, `docs/`). Si hace falta una carpeta nueva, proponela
+5. **Seguir la estructura de carpetas** ya definida en `README.md`
+   (`backend/`, `training/`, `frontend/`, `app_movil/`, `deploy/`, `scripts/`, `docs/`). Si hace falta una carpeta nueva, proponela
    antes de crearla por tu cuenta si cambia la estructura general.
 6. **Toda interfaz que se construya o se modifique debe ser responsive.** Aplica a pantallas
    nuevas, cambios en pantallas existentes y componentes nuevos (web `frontend/`, `front_app/`
@@ -73,8 +72,8 @@ confirmación antes de desviarte.
 
 ## Qué SÍ debés hacer
 
-- Seguir el orden de `PLAN_IMPLEMENTACION_COMPLETO.md` (motor de ajedrez antes que visión; visión
-  antes que integración completa) — el orden no es arbitrario, cada paso da algo demostrable antes
+- Respetar el orden en que se construyó el sistema (`docs/plan_sprints.md`: motor de ajedrez antes
+  que visión; visión antes que integración completa) — el orden no es arbitrario, cada paso da algo demostrable antes
   de depender del siguiente.
 - Escribir funciones chicas y probables de forma aislada (por ejemplo, `calcular_jugada(fen, nivel)`
   debe poder probarse sin cámara ni modelo entrenado).
@@ -89,11 +88,11 @@ confirmación antes de desviarte.
 
 - No commitear datasets completos ni checkpoints de modelos pesados directamente al repositorio.
   Esos archivos van a `.gitignore`; el dataset se referencia por su fuente (Lichess) y los
-  checkpoints se guardan en Google Drive (ver sección de Colab en `PLAN_IMPLEMENTACION_COMPLETO.md`).
+  checkpoints se guardan en Google Drive (ver `docs/marco_teorico_ia_entrenamiento.md` y los notebooks de `training/`).
 - No incluir credenciales, tokens ni claves de API en ningún archivo del repositorio, ni siquiera
   en archivos de configuración de ejemplo.
-- No agregar funcionalidad fuera del alcance de las 3 semanas (ver "Qué NO hacer" al final de
-  `PLAN_IMPLEMENTACION_COMPLETO.md`) sin que te lo pidan explícitamente.
+- No agregar funcionalidad que no te hayan pedido explícitamente (el alcance construido está en
+  `docs/plan_sprints.md`).
 - No optimizar prematuramente el modelo de aprendizaje antes de tener el pipeline funcionando
   de punta a punta.
 

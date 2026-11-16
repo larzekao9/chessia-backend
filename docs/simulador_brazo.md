@@ -91,7 +91,7 @@ contacto simulado en vivo.
 - **Fallos para probar** (front): soltar la pieza (afloja los dedos), dedos resbaladizos, la pinza no responde (Modbus da error), error en el
   próximo movimiento, alarma (modo 9), colisión (modo 11), modo distinto de TCP (`Control Mode Is Not Tcp`).
 - **Front** (`http://127.0.0.1:8765`, sin build): vista cenital con piezas, brazo esquemático y dedos; vista lateral junto a los dedos (página de respaldo; el front del proyecto usa la API de arriba); pose,
-  apertura, fuerza, agarre 0 a 3; log de comandos; reiniciar, cargar FEN, pausar y velocidad de la simulación. Responsive (verificado a 360, 800 y 1920 px de ancho). La vista 3D queda **pendiente**.
+  apertura, fuerza, agarre 0 a 3; log de comandos; reiniciar, cargar FEN, pausar y velocidad de la simulación. Responsive (verificado a 360, 800 y 1920 px de ancho). La vista 3D no está en esta página: la hace el gemelo digital 3D de la web principal (`SimuladorBrazoTablero3D.jsx`, en la Sala de Control), que usa la misma API.
 
 ## Qué NO simula
 

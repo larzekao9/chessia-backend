@@ -1,9 +1,16 @@
-# Brazo Robótico con Inteligencia Artificial para el Aprendizaje del Ajedrez
+# ChessIA — Brazo Robótico con Inteligencia Artificial para el Aprendizaje del Ajedrez
 
-Sistema que reconoce un tablero de ajedrez real mediante visión por computadora, calcula la
-jugada con el motor Stockfish, y la explica mediante un modelo de aprendizaje propio. La ejecución
-física con un brazo robótico queda para una fase posterior; por ahora todo el flujo es virtual y
-el brazo se simula con PyBullet.
+Sistema que enseña ajedrez jugando sobre un tablero real: una cámara reconoce las jugadas de la
+persona, **Turing** (el modelo de IA propio) decide su respuesta por sí solo y un brazo robótico
+(DOBOT CR5AS con pinza DH PGE-50-26) la ejecuta sobre el tablero físico, con capturas, enroque,
+captura al paso y coronación. Stockfish no decide las jugadas de Turing: se usa como oráculo de
+comparación (qué habría jugado y cuánto difiere) y como rival cuando la persona elige jugar contra
+el motor. La plataforma web (instalable como PWA) suma análisis de cada jugada, retroalimentación,
+camino de aprendizaje, cursos, retos entre personas y paneles para docentes e instituciones.
+
+El proyecto se presentó y defendió en la feria **Expociencia 2026** y funciona de punta a punta.
+El simulador (PyBullet y el gemelo digital 3D) sigue siendo el camino por defecto para desarrollar
+y probar sin mover el brazo real.
 
 Proyecto académico — Ingeniería de Software II, UAGRM (2/2026).
 Equipo: Suárez Burgos Hebert, Arze Kao Luis Ángel.
@@ -12,18 +19,22 @@ Equipo: Suárez Burgos Hebert, Arze Kao Luis Ángel.
 
 | Componente | Tecnología |
 |---|---|
-| Lenguaje | Python 3.12+ |
-| Visión por computadora | OpenCV |
-| Motor de ajedrez | Stockfish + `python-chess` |
-| Modelo de aprendizaje | PyTorch, entrenado en Google Colab |
-| Simulación del brazo | PyBullet |
-| Backend / API | FastAPI |
-| Frontend | React + Vite |
+| Lenguaje | Python 3.12+ (backend), JavaScript (web), Dart (app móvil) |
+| Visión por computadora | OpenCV + clasificador de piezas en PyTorch |
+| Motor de ajedrez | `python-chess`; Stockfish solo como oráculo y rival de comparación |
+| Modelo de aprendizaje | PyTorch, entrenado en Google Colab (Turing, con búsqueda de variantes) |
+| Brazo robótico | DOBOT CR5AS por TCP/IP + pinza DH PGE-50-26 por Modbus |
+| Simulación del brazo | PyBullet y gemelo digital 3D en la web |
+| Backend / API | FastAPI + SQLAlchemy (PostgreSQL; SQLite en desarrollo) |
+| Frontend | React + Vite, instalable como PWA |
+| App móvil | Flutter (`app_movil/`) |
+| Despliegue | Docker Compose (`deploy/`), ver [`docs/despliegue_homelab.md`](docs/despliegue_homelab.md) |
 
 ## Estructura
 
-Arquitectura en capas (MVC) — ver `PLAN_IMPLEMENTACION_COMPLETO.md`, secciones 3 y 4, para el
-detalle de la arquitectura y los patrones de diseño aplicados (Strategy, Factory, Repository).
+Arquitectura en capas (MVC) con los patrones Strategy, Factory y Repository. El detalle de las
+decisiones está en [`docs/plan_sprints.md`](docs/plan_sprints.md) (notas de seguimiento) y en
+[`docs/bitacora_brazo_robotico.md`](docs/bitacora_brazo_robotico.md).
 
 ```
 backend/
@@ -32,15 +43,20 @@ backend/
 │   ├── motor/             # Stockfish + python-chess
 │   ├── partida/            # orquesta partidas jugables (usa repositorios/ y estrategias/)
 │   ├── estrategias/         # patrón Strategy + Factory: quién decide la jugada
+│   ├── aprendizaje/          # Turing: inferencia, búsqueda de variantes, red de valor
 │   ├── vision/                # reconocimiento de tablero y piezas
-│   └── simulacion/             # integración con PyBullet
-├── repositorios/          # patrón Repository: acceso a datos de partidas
+│   ├── brazo/                  # control del brazo real (DOBOT CR5AS) y de la pinza
+│   └── simulacion/              # integración con PyBullet
+├── repositorios/          # patrón Repository: acceso a datos
 ├── esquemas/               # capa de Esquemas (Pydantic) — DTOs de entrada/salida
-├── modelos/                 # capa de Modelos de datos — entidades (Partida)
+├── modelos/                 # capa de Modelos de datos — entidades
 └── main.py                    # arma la app y monta el build del frontend
-training/              # pipeline de datos, entrenamiento del clasificador de piezas y notebook
-frontend/                # proyecto React (Vite) — tablero interactivo + consola del motor
-docs/                     # historias de usuario, C4, plan por sprint
+training/              # pipeline de datos, entrenamiento de los modelos y notebooks de Colab
+frontend/                # proyecto React (Vite): web, Sala de Control, gemelo digital 3D
+app_movil/                # app móvil (Flutter)
+deploy/                    # Dockerfile y docker-compose
+scripts/                    # utilidades: arranque del backend, calibración del brazo, etc.
+docs/                        # plan por sprint, bitácora del brazo, despliegue, marco teórico
 ```
 
 ## Setup
@@ -128,3 +144,9 @@ KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python -m pytest
 ## Documentación
 
 - [`docs/plan_sprints.md`](docs/plan_sprints.md) — backlog por sprint con seguimiento de tareas.
+- [`docs/bitacora_brazo_robotico.md`](docs/bitacora_brazo_robotico.md) — bitácora técnica del brazo robótico, la pinza y el cementerio.
+- [`docs/simulador_brazo.md`](docs/simulador_brazo.md) — simulador del DOBOT CR5AS.
+- [`docs/turing_hoja_de_ruta.md`](docs/turing_hoja_de_ruta.md) y [`docs/marco_teorico_ia_entrenamiento.md`](docs/marco_teorico_ia_entrenamiento.md) — Turing: mediciones y fundamento.
+- [`docs/despliegue_homelab.md`](docs/despliegue_homelab.md) y [`docs/despliegue_nube.md`](docs/despliegue_nube.md) — despliegue y actualización del servidor.
+- [`docs/base_de_datos/`](docs/base_de_datos/) — esquema SQL y diccionario de datos.
+- [`docs/manual_usuario/`](docs/manual_usuario/) — manual de usuario.

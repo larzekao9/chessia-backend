@@ -11,6 +11,14 @@
 
 ---
 
+## Estado final (2026-11-15)
+
+El sistema completo (cámara, Turing y brazo real DOBOT CR5AS con pinza DH PGE-50-26) se probó de punta a punta y se presentó y defendió en la Expociencia 2026.
+
+Las entradas de abajo son un registro cronológico y **no se reescribieron**, para conservar el historial: los «Pendiente», «Falta» y «sin probar» de las entradas antiguas se fueron resolviendo en las posteriores (capturas, enroque, captura al paso, coronación y cementerio ordenado; aperturas por tipo de pieza; calibración de alturas y dedos). Para el estado vigente, ver el cierre de HU9 en [`plan_sprints.md`](plan_sprints.md) y la entrada más reciente de esta bitácora.
+
+---
+
 ## 2026-09-26 — Piezas de ajedrez en 3D para el simulador PyBullet
 
 **Contexto:** el simulador (`backend/servicios/simulacion/escena.py`) hasta ahora
@@ -505,9 +513,16 @@ Cada uno toma de su propio cementerio la dama para coronar: **el brazo, de las c
 
 **Rango de casillas.** El del brazo, 0 a 31 (por orden de llegada se siguen usando las 30 primeras; ordenado, las 16 primeras). El del jugador, 0 a 15.
 
-**Ajustar el cementerio con flechas (en vez de escribir milímetros).** Dentro de «Cementerio y damas de reserva», el bloque «Ajustar el cementerio con flechas» funciona como «Centrar la pinza»: se elige el cementerio (del brazo o del jugador), la casilla a ajustar y la pieza que se simula; «Bajar» lleva la pinza, sin pieza y con los dedos abiertos, hasta donde SOLTARÍA esa pieza (a la altura de la mesa) y la deja suspendida; las flechas la mueven de a 0,5, 1, 2 o 5 mm (hacia las columnas a/h, las filas 1/8, y más arriba o más abajo) hasta que caiga en el centro de la casilla; «Guardar la posición» guarda lo que defina esa casilla y «Guardar la altura» fija el desnivel de la mesa para que la base de esa pieza quede a `holgura_cementerio_mm`. Qué define cada casilla:
-- **casilla 1** (la primera de los peones): el origen del cementerio;
-- **casilla 2 u 8** (otra de la primera fila): el paso entre casillas (la distancia al origen dividida las casillas que hay; la 8 es más precisa);
-- **casilla 9** (la primera de la fila de piezas): el paso entre filas.
+**Enseñar el cementerio llevando una pieza real (en vez de escribir milímetros o empujar una pinza vacía).** Dentro de «Cementerio y damas de reserva», el bloque «Enseñar el cementerio llevando una pieza» (`cementerio_llevar` y `cementerio_soltar` en `control_brazo.py`; rutas `POST /brazo/control/cementerio/llevar` y `/cementerio/soltar`; cálculos puros en `ajuste_cementerio.py`):
 
-Se repite en el otro cementerio. Con el brazo real queda en `brazo.json`. Se empieza con un peón y la casilla 9 con un caballo; al final se prueba la dama («Probar sin pieza»), que es la más alta y la que más cuenta que el hueco alcance.
+1. Se elige el cementerio (del brazo o del jugador) y qué pieza es: «Peón 1» a «Peón 8», «Caballo 1 y 2», «Alfil 1 y 2», «Torre 1 y 2» o «Dama 1 y 2». Eso fija el lugar que le toca en el cementerio ordenado.
+2. Se pone una pieza real de ese tipo en una casilla del tablero (por defecto h2) y se toca «1 · Tomar y llevar al cementerio». El brazo la agarra con la apertura propia de ese tipo (si la pinza cierra sin sentir nada, se retira y avisa), la lleva a su lugar y la deja SUSPENDIDA, a la altura en la que la soltaría, sin soltarla. Si ese cementerio todavía no estaba calibrado, parte de una propuesta automática calculada del tablero.
+3. Se corrige con las flechas (0,5, 1, 2 o 5 mm por toque: hacia la columna a o h, hacia la fila 1 u 8, y más arriba o más abajo) hasta el punto donde se quiere dejar.
+4. «2 · Soltar aquí y guardar» abre la pinza, sube y vuelve a descanso, y guarda lo enseñado. Con «Guardar también la altura» fija además `desnivel_cementerio_mm` (la base de esa pieza queda a `holgura_cementerio_mm` de la mesa; tiene que salir entre 0 y 60 mm). «Soltar sin guardar» suelta sin cambiar nada. Si algo no se puede guardar, responde el motivo y el brazo sigue con la pieza en la mano: se corrige y se vuelve a soltar.
+
+**Qué se guarda.**
+- **El lugar exacto** de esa pieza (`cementerio_lugares`, en `brazo.json`): un lugar enseñado con una pieza real gana a la cuadrícula y enseñar otra pieza después no lo corre. El ejecutor lo usa en la partida antes que la cuadrícula (cubierto en `test_ejecutor_movimiento.py`).
+- **La cuadrícula**, para los lugares que todavía no se enseñaron: el peón 1 fija el `origen`; otra pieza de la primera fila, el `paso` (la distancia al origen dividida las columnas; cuanto más lejos, más preciso); la primera de otra fila, el `paso_fila`. Si la separación saldría fuera de 30 a 1000 mm (casi seguro se soltó en otro lugar), la cuadrícula no se toca y igual vale el lugar enseñado.
+- **Peones en bloque, demás piezas en línea recta.** El ancho del bloque se elige arriba con «peones por fila» (1 a 8): con 4 quedan los peones 1 a 4 en una fila y 5 a 8 en la siguiente, y las demás piezas empiezan en la fila que sigue. Cambiar los peones por fila borra los lugares enseñados, porque cambia qué número le toca a cada pieza.
+
+Se repite en el otro cementerio. Con el brazo real queda en `brazo.json`. Se empieza con el peón 1 y se termina con una dama (el último paso es «Probar sin pieza» con ella): es la más alta y la que más cuenta que el hueco alcance.

@@ -13,10 +13,10 @@ los checkpoints no se suben a git.
 | # | Paso | Estado |
 |---|---|---|
 | 0 | Interfaz UCI + medición de Elo base contra Stockfish con Elo calibrado | **Hecho** (v6 ≈ 1355 Elo) |
-| 1 | Búsqueda ligera sobre la red + libro de aperturas | Búsqueda **hecha y medida**: 92,5 % contra la red sola y **Elo ≈ 1808** (profundidad 3, peso 40). Falta integrarla a la app/UCI y el libro de aperturas |
-| 2 | Bot de Lichess (rating público) | Pendiente |
-| 3 | Cabeza de valor + búsqueda estilo AlphaZero (datos: base de evaluaciones de Lichess) | Pendiente |
-| 4 | Evolución visible: gráfico de Elo por versión + modo "escalera" | Pendiente |
+| 1 | Búsqueda ligera sobre la red + libro de aperturas | Búsqueda **hecha, medida e integrada a la app** (decide la jugada en modo maestro, `busqueda_turing.py`): 92,5 % contra la red sola y **Elo ≈ 1808** (profundidad 3, peso 40). El libro de aperturas no se hizo |
+| 2 | Bot de Lichess (rating público) | No realizado (trabajo futuro) |
+| 3 | Cabeza de valor + búsqueda estilo AlphaZero (datos: base de evaluaciones de Lichess) | Primer experimento **hecho y medido** (red de valor entrenada con 1.000.000 de posiciones de Lichess, `modelo_valor.py`, ver el registro de mediciones). No está integrada a la app (solo se usa en las mediciones de `training/enfrentar_modelos.py`) ni es la búsqueda completa estilo AlphaZero: trabajo futuro |
+| 4 | Evolución visible: gráfico de Elo por versión + modo "escalera" | No realizado (trabajo futuro) |
 | 5 | Ficha del modelo y documentación | Continuo (este archivo) |
 
 ## Cómo se trabaja (sesiones de duración impredecible)

@@ -1,9 +1,11 @@
 # Plan de implementación por sprint
 
-Basado en `PLAN_IMPLEMENTACION_COMPLETO.md` (secciones 13 a 16) y en el Product Backlog de 11
+Basado en el plan inicial (`PLAN_IMPLEMENTACION_COMPLETO.md`, ya retirado del repositorio) y en el Product Backlog de 11
 Historias de Usuario (51 puntos totales) definido junto con la documentación de SW2 y Taller
 de Grado I. Reemplaza la versión anterior de este archivo, que estaba basada en un borrador
 previo del plan (por área, sin las 11 HU balanceadas).
+
+**Estado al 2026-11-15.** El proyecto se presentó y defendió en la feria Expociencia 2026 y funciona de punta a punta (visión, Turing, brazo real y web). Las tareas sin marcar que quedan son alcance descartado o trabajo futuro, y cada una lo dice.
 
 ---
 
@@ -157,7 +159,7 @@ aprendizaje, análisis y estadísticas) vive en la web.
 - [x] 9 tarjetas: introducción, una por pieza (6), jaque y jaque mate, y prueba final
 - [x] Cada tarjeta de pieza: nombre, cómo se mueve y un tablero en miniatura en el
       que hay que tocar una casilla alcanzable (`casillasIlustrativas`)
-- [ ] Mostrar el apodo de la pieza en la tarjeta (hoy solo aparece en el Panel de Aprendizaje)
+- [ ] Mostrar el apodo de la pieza en la tarjeta (hoy solo aparece en el Panel de Aprendizaje) — trabajo futuro
 - [x] Prueba final: la torre tiene que dar jaque al rey negro en una jugada
 - [x] Marca de finalizado por usuario (`onboarding_completado_<id>`) en el navegador. Se guarda en
       el navegador y no en la sesión del servidor: aparece una sola vez por dispositivo. "Saltar"
@@ -385,7 +387,7 @@ Dashboard post-partida con métricas personales:
 
 **Salida:** Jugador ve su progreso real, gamificación que lo motiva a jugar más.
 
-### **HU4 — Reentrenamiento y Evaluación del Modelo** (5 pts, Luis Ángel)
+### **HU4 — Reentrenamiento y Evaluación del Modelo** (5 pts, Luis Ángel) — ciclo automático no construido (ver el cierre al final de la sección)
 
 Ciclo de mejora automática del modelo propio:
 
@@ -487,6 +489,7 @@ exigiría PyTorch con CUDA 12.8 en un entorno aparte). **Todavía no se corrió*
 - **Subir el tope de nivel (hoy 18):** no se decide por la precisión de predicción. Hay que medir partidas completas de
   la v6 contra Stockfish en niveles 19 y 20; si no las supera, el tope queda en 18. Es el siguiente paso de HU4.
 - **Sigue pendiente:** el botón de entrenar/evaluar/promover en el frontend (ciclo de versiones con rollback).
+- **Cierre (2026-11-15):** el ciclo automático de arriba (recopilar, reentrenar, evaluar y promover con rollback) no se construyó: queda como trabajo futuro. En su lugar, el modelo se reentrenó a mano en Colab, con versiones y mediciones registradas (v5 y v6; ver `docs/turing_hoja_de_ruta.md`), y se sumó la búsqueda de variantes (Elo ≈ 1808). Cumple la regla del proyecto: el modelo solo se reentrena en lotes controlados y versionados.
 
 ### **Flujo del Jugador Completo (Ahora)**
 
@@ -550,8 +553,8 @@ HU4 (Reentrenamiento) — depende de HU5 (usa `analisis-completo`)
 
 ## Sprint 3 — Brazo robótico y cierre
 
-**Objetivo:** interconexión con el brazo (simulado), rostro y expresiones, panel de
-progreso, administración de sesiones, e integración completa para la defensa.
+**Objetivo:** interconexión con el brazo robótico (DOBOT CR5AS, con simulador para desarrollar), rostro y expresiones, panel de
+progreso, administración de sesiones, e integración completa para la defensa. **Cerrado:** ver el cierre de HU9 más abajo.
 
 | HU   | Descripción                                | Puntos | Responsable |
 | ---- | ------------------------------------------ | ------ | ----------- |
@@ -606,18 +609,14 @@ Hecho:
 - [x] Control desde la web: conectar, habilitar, parada, pinza, parámetros, configuraciones guardadas, mover una pieza
       (con ensayo previo) y posición inicial; más el gemelo digital 3D.
 
-Falta:
-- [ ] Medir la apertura del alfil, la torre y el rey (`scripts/ajustar_apertura_pieza.py`): sin ella el ejecutor no mueve
-      esas piezas.
-- [ ] Capturas (retirar la pieza capturada a una zona fuera del tablero), enroque, captura al paso y coronación (poner
-      la pieza elegida): hoy `EjecutorReal` lanza `NotImplementedError` si la jugada captura.
-- [ ] Verificar con la cámara que la jugada del brazo quedó bien hecha (bucle de verificación).
-- [ ] Verificar la altura Z en las cuatro esquinas con los dedos actuales y pegar goma fina en los dedos.
-- [ ] Integración de punta a punta con al menos 10 posiciones de prueba documentadas.
-- [ ] Colchón de 2-3 días antes de la defensa para bugs de integración (con el plazo del 26-27 de octubre queda
-      reducido: priorizar lo mostrable).
-
-- [ ] HU7, HU8, HU11: interfaz y lógica de cada una (HU11 tiene hecha la base con los cursos, ver arriba).
+**Cierre de HU9 (2026-11-15).** El sistema completo (cámara, Turing y brazo real) se probó de punta a punta y se presentó y defendió en la Expociencia 2026. Lo que figuraba como «Falta» el 2026-10-23 quedó así:
+- [x] Aperturas medidas por tipo de pieza, incluidos alfil, torre y rey (`scripts/ajustar_apertura_pieza.py`): sin la apertura de un tipo, el ejecutor no mueve esa pieza.
+- [x] Capturas (la pieza capturada va a un cementerio ordenado por piezas, uno por jugador), enroque, captura al paso y coronación (con la dama del propio cementerio). Ver `docs/bitacora_brazo_robotico.md`.
+- [x] Verificación con la cámara después de cada jugada del brazo (`_ejecutar_y_verificar` en `backend/servicios/partida/partida_fisica.py`).
+- [x] Calibración de alturas y dedos (impresos, con apertura y giro propios por pieza). Ver la bitácora.
+- [x] Integración de punta a punta con el brazo real. No se armó una tabla de «10 posiciones de prueba»: se validó con partidas físicas completas y en la presentación de la Expociencia.
+- [x] Colchón antes de la defensa: superado, la defensa ya se realizó.
+- [x] HU7 (rostro de Turing, avatar 3D), HU8 (panel de progreso) y HU11 (administración de sesiones y participantes): interfaz y lógica hechas (ver las secciones de abajo: dashboard por rol, módulo de enseñanza, perfiles e instituciones).
 
 ---
 
@@ -1068,8 +1067,8 @@ para varias historias (especialmente HU10 y HU11):
   (las 4 tablas) + `RepositorioPartidasPostgres`. Si se levanta un Postgres local y se setea
   `DATABASE_URL`, `servicio_partida.py` empieza a persistir ahí solo (sin tocar código); si no,
   sigue igual que antes, en memoria. Probado contra SQLite en memoria (mismas tablas, sin
-  tipos específicos de Postgres) — **falta probarlo contra un Postgres real** antes de la
-  defensa, por si aparece alguna diferencia de dialecto que SQLite no detecta.
+  tipos específicos de Postgres). **Cerrado:** hoy el sistema corre sobre un PostgreSQL real en
+  Docker (ver `despliegue_homelab.md`).
 
 **Pendiente conocido sobre esto:** el humano siempre juega blancas, la promoción de peón
 siempre es a dama, y la tabla `jugada` (detalle por movimiento, para RF34/HU4) todavía no la
@@ -1081,8 +1080,8 @@ quedan para si sobra tiempo.
 ## Notas de seguimiento
 
 - Marcar los checkboxes a medida que se completan las tareas — este archivo es el tablero de
-  seguimiento; `PLAN_IMPLEMENTACION_COMPLETO.md` sigue siendo la fuente de verdad del alcance,
-  la arquitectura y las reglas del proyecto.
+  seguimiento. El plan inicial (`PLAN_IMPLEMENTACION_COMPLETO.md`) se retiró del repositorio: las reglas del
+  proyecto están en `CLAUDE.md` y la arquitectura en el `README.md`.
 - El contrato de datos entre módulos es FEN. Las jugadas se están devolviendo en notación SAN
   (más legible para mostrar en pantalla) — recordar convertir a UCI cuando HU9 necesite
   indicarle al brazo casillas de origen y destino (`python-chess` lo resuelve con
