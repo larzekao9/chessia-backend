@@ -15,7 +15,7 @@ crea estos 4 usuarios automáticamente la primera vez que el backend arranca con
 |---|---|---|---|
 | `facilitador@test.com` | `admin123` | facilitador | Facilitador Árbitro |
 | `jugador@test.com` | `test123456` | jugador | Jugador Aspirante |
-| `jugador@kairos-chess.ai` | `test123456` | jugador | Jugador Kairos Core |
+| `jugador@chessia.test` | `test123456` | jugador | Jugador ChessIA |
 | `suarezburgoshebert@gmail.com` | `admin123` | facilitador | Hebert Suarez Burgos |
 
 Son credenciales de desarrollo, ya están en el código fuente tal cual (`database.py`, tracked en

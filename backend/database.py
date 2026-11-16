@@ -293,15 +293,15 @@ def sembrar_usuarios_iniciales(engine: Engine) -> None:
                 )
             )
 
-        # 3. Jugador KAIROS (clave: test123456)
-        jugador_kairos = session.execute(
-            select(UsuarioORM).where(UsuarioORM.email == "jugador@kairos-chess.ai")
+        # 3. Segundo jugador de prueba (clave: test123456)
+        jugador_chessia = session.execute(
+            select(UsuarioORM).where(UsuarioORM.email == "jugador@chessia.test")
         ).scalar_one_or_none()
-        if not jugador_kairos:
+        if not jugador_chessia:
             session.add(
                 UsuarioORM(
-                    email="jugador@kairos-chess.ai",
-                    nombre="Jugador Kairos Core",
+                    email="jugador@chessia.test",
+                    nombre="Jugador ChessIA",
                     password_hash=hash_password("test123456"),
                     rol="jugador",
                     activo=True,
