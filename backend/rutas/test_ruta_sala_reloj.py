@@ -10,13 +10,13 @@ from backend.rutas.test_ruta_sala import _registrar_jugador, auth_header, client
 from backend.servicios.sala import presencia_sala
 
 CINCO_MIN = 300_000
-INICIO = datetime(2026, 10, 26, 15, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture
 def tiempo(monkeypatch):
     """Reloj de la partida y de la ausencia, que avanzan a mano."""
-    estado = {"ahora": INICIO, "mono": 1000.0}
+    # arranca en la hora real: la creación de la sala y la limpieza de salas viejas leen el reloj del sistema
+    estado = {"ahora": datetime.now(timezone.utc), "mono": 1000.0}
 
     def pasan(segundos: float) -> None:
         estado["ahora"] += timedelta(seconds=segundos)

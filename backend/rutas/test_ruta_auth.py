@@ -334,6 +334,36 @@ def test_google_login_rechaza_tokens_ficticios_por_defecto(cliente, monkeypatch)
     assert respuesta.status_code in (400, 401) and "access_token" not in respuesta.text
 
 
+def test_google_login_con_token_de_caracteres_raros_se_codifica_y_responde_400(cliente, monkeypatch) -> None:
+    import urllib.error
+
+    consultadas: list[str] = []
+
+    def _google_rechaza(solicitud, timeout=None):
+        consultadas.append(solicitud.full_url)
+        raise urllib.error.HTTPError(solicitud.full_url, 400, "token inválido", {}, None)
+
+    monkeypatch.setattr("backend.servicios.auth.servicio_auth.urllib.request.urlopen", _google_rechaza)
+    respuesta = cliente.post("/auth/google", json={"credential": "abc def&x=1" + chr(10) + "z"})
+    assert respuesta.status_code == 400
+    assert consultadas and " " not in consultadas[0] and chr(10) not in consultadas[0] and "&x=1" not in consultadas[0]
+
+
+def test_google_login_con_falla_interna_no_filtra_el_detalle_tecnico(cliente, monkeypatch) -> None:
+    def _falla(_credencial):
+        raise RuntimeError("detalle interno secreto")
+
+    monkeypatch.setattr("backend.rutas.ruta_auth.verificar_token_google", _falla)
+    respuesta = cliente.post("/auth/google", json={"credential": "cualquiera"})
+    assert respuesta.status_code == 500
+    assert "detalle interno secreto" not in respuesta.text and "RuntimeError" not in respuesta.text
+
+
+def test_la_politica_de_contenido_limita_los_destinos_de_formularios(cliente) -> None:
+    politica = cliente.get("/health").headers["content-security-policy"]
+    assert "form-action 'self'" in politica and "frame-ancestors 'self'" in politica and "object-src 'none'" in politica
+
+
 def test_google_login_vincula_cuenta_existente_y_preserva_rol(cliente) -> None:
     # 1. Se registra previamente con correo y contraseña
     cliente.post("/auth/registro", json={"email": "vinculado@test.com", "nombre": "Vinculado", "password": "pass1234"})

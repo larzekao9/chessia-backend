@@ -319,7 +319,7 @@ def test_borrar_clase(cliente) -> None:
     cliente.post("/vision/dataset/foto", json={"fen_piezas": "8/8/8/8/8/8/8/4K3", "solo_piezas": True})
     assert cliente.delete("/vision/dataset/clase/white-king").json() == {"borradas": 1}
     assert cliente.get("/vision/dataset/resumen").json()["total"] == 0
-    assert cliente.delete("/vision/dataset/clase/../x").status_code in (404, 422)
+    assert cliente.delete("/vision/dataset/clase/../x").status_code in (404, 405, 422)  # el cliente normaliza «..» y la ruta queda sin DELETE (405)
     assert cliente.delete("/vision/dataset/clase/inventada").status_code == 422
 
 

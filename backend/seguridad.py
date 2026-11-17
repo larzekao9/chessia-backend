@@ -24,6 +24,7 @@ POLITICA_DE_CONTENIDO = "; ".join(
         "object-src 'none'",
         "base-uri 'self'",
         "frame-ancestors 'self'",
+        "form-action 'self'",
     ]
 )
 

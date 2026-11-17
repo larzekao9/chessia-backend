@@ -289,6 +289,7 @@ def test_nivel_de_un_jugador_sin_partidas_calibradas(contexto) -> None:
 
     assert respuesta.status_code == 200
     assert respuesta.json() == {
+        "desafio_turing": 0,
         "nivel_estimado": None,
         "rango_estimado": None,
         "diagnostico_completado": False,

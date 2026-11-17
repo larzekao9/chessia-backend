@@ -398,7 +398,9 @@ def login_google(data: GoogleAuthRequest, solicitud: Request, db: Session = Depe
             registrar_intento_fallido(cliente)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en autenticación con Google: {str(e)}")
+        # el detalle técnico va al registro del servidor, no al cliente (ZAP lo marcó como «Application Error Disclosure»)
+        logger.exception("Falló el inicio de sesión con Google")
+        raise HTTPException(status_code=500, detail="No se pudo completar el inicio de sesión con Google. Probá de nuevo en unos minutos.") from e
 
     access, refresh = create_tokens(user)
     return AuthResponse(

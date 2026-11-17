@@ -145,6 +145,10 @@ def test_fallo_pinza_no_responde(cliente, servicio):
     with pytest.raises(ErrorDobot):
         PinzaDH(cliente).conectar()
     simulador.inyectar_fallo("pinza_no_responde", False)
+    # al no poder renovar el canal Modbus, el cliente queda desconectado: hay que conectar de nuevo para seguir
+    with pytest.raises(RuntimeError, match="no está conectada"):
+        pinza.estado()
+    pinza.conectar()
     assert pinza.estado().posicion > 0
     pinza.desconectar()
 
@@ -163,10 +167,10 @@ def test_fallo_error_en_el_proximo_movimiento_y_alarma(cliente, servicio):
     assert cliente.modo() == 5
 
 
-def test_modo_distinto_de_tcp_da_respuesta_no_interpretable(cliente, servicio):
+def test_modo_distinto_de_tcp_avisa_que_hay_que_activar_el_control_remoto(cliente, servicio):
     simulador, _, _ = servicio
     simulador.inyectar_fallo("no_tcp", True)
-    with pytest.raises(ErrorDobot, match="Respuesta inesperada"):
+    with pytest.raises(ErrorDobot, match="no está en modo de control TCP/IP"):
         cliente.modo()
     cliente.enviar("RequestControl()")
     assert cliente.modo() == 5

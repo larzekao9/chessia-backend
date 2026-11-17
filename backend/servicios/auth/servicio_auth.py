@@ -4,6 +4,7 @@ import logging
 import os
 import secrets
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -122,7 +123,8 @@ def verificar_token_google(token: str) -> dict:
             "email_verified": "true",
         }
 
-    url = f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
+    # el token va codificado: con espacios, saltos de línea o «&» sin codificar la URL era inválida (500) o podía agregar parámetros a la consulta
+    url = "https://oauth2.googleapis.com/tokeninfo?" + urllib.parse.urlencode({"id_token": token})
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "AjedrezRobotico/1.0"})
         with urllib.request.urlopen(req, timeout=10) as response:

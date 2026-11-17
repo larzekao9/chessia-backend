@@ -457,6 +457,8 @@ def test_estado_partida_sin_usuario_asociado_devuelve_nombre_null() -> None:
 @pytest.mark.skipif(not CAMARA_DISPONIBLE, reason="No hay cámara conectada en esta máquina")
 def test_vision_foto_devuelve_jpeg() -> None:
     respuesta = cliente.get("/vision/foto", headers=_headers_usuario_nuevo())
+    if respuesta.status_code == 503:
+        pytest.skip("La cámara está ocupada o configurada en otra fuente en esta máquina")
     assert respuesta.status_code == 200
     assert respuesta.headers["content-type"] == "image/jpeg"
     assert len(respuesta.content) > 0
@@ -484,10 +486,14 @@ def test_vision_reconocer_responde_200_o_422_si_no_ve_tablero() -> None:
     # que el endpoint no rompe: reconoce un tablero válido (200) o avisa que no
     # encontró ninguno en la imagen (422), nunca un error interno sin manejar.
     respuesta = cliente.post("/vision/reconocer", data={"turno": "w"}, headers=_headers_usuario_nuevo())
+    if respuesta.status_code == 503:
+        pytest.skip("La cámara está ocupada o configurada en otra fuente en esta máquina")
     assert respuesta.status_code in (200, 422)
 
 
-def test_vision_reconocer_con_foto_subida_sin_tablero_devuelve_422() -> None:
+def test_vision_reconocer_con_foto_subida_sin_tablero_devuelve_422(monkeypatch) -> None:
+    # sin las esquinas calibradas que pueda tener esta máquina: una imagen gris no tiene tablero
+    monkeypatch.setattr("backend.servicios.vision.reconocimiento.cargar_esquinas_calibradas", lambda *_args, **_kwargs: None)
     # Una imagen sin ningún tablero — confirma que la ruta de "foto subida"
     # (en vez de la cámara fija) procesa el archivo. No necesita cámara ni
     # checkpoint entrenado: falla antes, al no encontrar las 4 esquinas.
@@ -515,7 +521,9 @@ def test_vision_foto_subida_sobre_el_tope_devuelve_413(ruta: str) -> None:
     assert respuesta.status_code == 413
 
 
-def test_vision_grilla_debug_con_foto_subida_sin_tablero_devuelve_422() -> None:
+def test_vision_grilla_debug_con_foto_subida_sin_tablero_devuelve_422(monkeypatch) -> None:
+    # sin las esquinas calibradas que pueda tener esta máquina: una imagen gris no tiene tablero
+    monkeypatch.setattr("backend.servicios.vision.reconocimiento.cargar_esquinas_calibradas", lambda *_args, **_kwargs: None)
     imagen = np.full((200, 200, 3), 128, dtype=np.uint8)
     exito, buffer = cv2.imencode(".jpg", imagen)
     assert exito
@@ -536,6 +544,8 @@ def test_mover_desde_foto_responde_200_o_422_si_no_coincide_ninguna_jugada() -> 
     headers = _headers_usuario_nuevo()
     partida_id = cliente.post("/partida", json={"nivel": 5}, headers=headers).json()["id"]
     respuesta = cliente.post(f"/partida/{partida_id}/mover-desde-foto", headers=headers)
+    if respuesta.status_code == 503:
+        pytest.skip("La cámara está ocupada o configurada en otra fuente en esta máquina")
     assert respuesta.status_code in (200, 422)
 
 

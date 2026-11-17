@@ -77,7 +77,8 @@ def test_pasos_peligrosos_o_mal_formados_se_rechazan(cliente, pasos) -> None:
 
 def test_nombres_con_rutas_o_simbolos_se_rechazan(cliente) -> None:
     for nombre in ("..", "a.b", "x$y"):
-        assert cliente.put(f"/brazo/control/rutinas/{nombre}", json={"pasos": RUTINA}).status_code in (404, 422)
+        # el cliente normaliza «..» y la ruta cae en /brazo/control/, que no admite PUT (405): también es un rechazo
+        assert cliente.put(f"/brazo/control/rutinas/{nombre}", json={"pasos": RUTINA}).status_code in (404, 405, 422)
 
 
 def test_una_rutina_puede_llamar_a_otra_pero_no_haber_ciclos(cliente) -> None:

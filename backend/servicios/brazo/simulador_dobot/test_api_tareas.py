@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -351,6 +352,9 @@ def test_el_simulador_se_niega_a_guardar_en_la_calibracion_real(parametros_agarr
 
 
 def test_el_script_avisa_con_claridad_si_falta_un_modulo():
-    resultado = subprocess.run([sys.executable, "-S", str(RAIZ / "scripts" / "simulador_brazo.py")], capture_output=True, text=True, timeout=60)
+    resultado = subprocess.run(
+        [sys.executable, "-S", str(RAIZ / "scripts" / "simulador_brazo.py")], capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},  # en Windows la consola usaría cp1252 y el texto con tildes no se leería igual
+    )
     assert resultado.returncode == 1
     assert "entorno conda `ajedrez`" in resultado.stdout and "simulador_brazo.sh" in resultado.stdout
