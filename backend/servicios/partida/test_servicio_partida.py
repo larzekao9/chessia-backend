@@ -53,6 +53,13 @@ def test_crear_partida_con_fen_inicial_invalido_lanza_valueerror() -> None:
         crear_partida(nivel=5, fen_inicial="esto no es un fen")
 
 
+def test_crear_partida_con_tablero_sin_piezas_lanza_valueerror_con_mensaje_propio() -> None:
+    # El tablero físico puede estar vacío a propósito al probar la cámara: no es una posición imposible,
+    # es que no hay nada que reconocer, y el mensaje lo dice.
+    with pytest.raises(ValueError, match="vacío"):
+        crear_partida(nivel=5, fen_inicial="8/8/8/8/8/8/8/8 w - - 0 1")
+
+
 def test_crear_partida_con_fen_inicial_imposible_lanza_valueerror() -> None:
     # 9 damas blancas — sintácticamente válido, pero imposible en una partida
     # real (visto en vivo con un FEN mal reconocido por visión, que hacía
